@@ -1106,6 +1106,9 @@ net_set_filter(
      */
     net_hash_entry_t hash_entp = NULL;
 
+    if (!MACH_PORT_VALID (rcv_port))
+	return (D_INVALID_OPERATION);
+
     /*
      * Check the filter syntax.
      */
