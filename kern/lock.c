@@ -230,6 +230,153 @@ void _simple_unlock(
 
 #endif	/* MACH_SLOCKS && NCPUS == 1 */
 
+#if	MACH_LDEBUG && NCPUS > 1
+/*
+ *	Each processor keeps the list of the simple locks it holds, and
+ *	each lock records which processor holds it.
+ *
+ *	Interrupt handlers take and release locks in a stack-like
+ *	manner, but a lock may be released out of order, so the list is
+ *	only changed with interrupts disabled.
+ */
+
+#define	NSLINFO	32		/* locks recorded per processor */
+
+struct simple_locks_held {
+	unsigned int	count;
+	simple_lock_t	locks[NSLINFO];
+};
+
+static struct simple_locks_held simple_locks_held[NCPUS];
+static int do_check_simple_locks = 1;
+
+/* Set once a check failed, so that the panic path can take its locks.  */
+static volatile boolean_t simple_locks_failed;
+
+static void
+simple_lock_failed(simple_lock_t l, const char *problem,
+		   const char *expr, const char *location)
+{
+	int holder = l->holder;
+
+	if (simple_locks_failed)
+		return;
+	simple_locks_failed = TRUE;
+	panic("simple lock %s (%p) %s at %s; holder: cpu %d, %s at %s",
+	      expr ? expr : "?", l, problem, location ? location : "?",
+	      holder - 1,
+	      holder && l->expr ? l->expr : "?",
+	      holder && l->location ? l->location : "?");
+}
+
+static void
+simple_lock_record(simple_lock_t l, int me,
+		   const char *expr, const char *location)
+{
+	struct simple_locks_held *held = &simple_locks_held[me - 1];
+	spl_t s;
+
+	s = splhigh();
+	l->holder = me;
+	l->expr = expr;
+	l->location = location;
+	if (held->count < NSLINFO)
+		held->locks[held->count] = l;
+	held->count++;
+	splx(s);
+}
+
+static void
+simple_lock_forget(simple_lock_t l, int me)
+{
+	struct simple_locks_held *held = &simple_locks_held[me - 1];
+	unsigned int i, n;
+	spl_t s;
+
+	s = splhigh();
+	n = held->count < NSLINFO ? held->count : NSLINFO;
+	for (i = 0; i < n; i++)
+		if (held->locks[i] == l) {
+			/* Keep the list packed.  */
+			held->locks[i] = held->locks[n - 1];
+			held->locks[n - 1] = NULL;
+			break;
+		}
+	if (held->count > 0)
+		held->count--;
+	l->holder = 0;
+	splx(s);
+}
+
+void _simple_lock_ldebug(
+	simple_lock_t	l,
+	const char	*expression,
+	const char	*location)
+{
+	int me = cpu_number() + 1;
+
+	/* Nobody else stores our number, so this read is not racy.  */
+	if (l->holder == me)
+		simple_lock_failed(l, "taken again by the same cpu",
+				   expression, location);
+	_simple_lock(l);
+	simple_lock_record(l, me, expression, location);
+}
+
+boolean_t _simple_lock_try_ldebug(
+	simple_lock_t	l,
+	const char	*expression,
+	const char	*location)
+{
+	if (!_simple_lock_try(l))
+		return FALSE;
+	simple_lock_record(l, cpu_number() + 1, expression, location);
+	return TRUE;
+}
+
+void _simple_unlock_ldebug(
+	simple_lock_t	l)
+{
+	int me = cpu_number() + 1;
+
+	if (l->holder != me)
+		simple_lock_failed(l, l->lock_data
+				   ? "released, but held by another cpu"
+				   : "released, but not held",
+				   NULL, NULL);
+	simple_lock_forget(l, me);
+	_simple_unlock(l);
+}
+
+boolean_t simple_lock_held(
+	simple_lock_t	l)
+{
+	if (simple_locks_failed)
+		return l->lock_data != 0;
+	return l->holder == cpu_number() + 1;
+}
+
+void check_simple_locks(void)
+{
+	struct simple_locks_held *held = &simple_locks_held[cpu_number()];
+
+	if (do_check_simple_locks && held->count != 0)
+		simple_lock_failed(held->locks[0], "held while blocking",
+				   held->locks[0]->expr,
+				   held->locks[0]->location);
+}
+
+void check_simple_locks_enable(void)
+{
+	do_check_simple_locks = 1;
+}
+
+void check_simple_locks_disable(void)
+{
+	do_check_simple_locks = 0;
+}
+#endif	/* MACH_LDEBUG && NCPUS > 1 */
+
 /*
  *	Routine:	lock_init
  *	Function:
@@ -678,6 +825,26 @@ void db_show_all_slocks(void)
 		db_printf("%d: %s (", i, info->expr);
 		db_printsym((uintptr_t) info->l, DB_STGY_ANY);
 		db_printf(") locked by %s\n", info->loc);
+	}
+}
+#elif	MACH_LDEBUG && NCPUS > 1
+void db_show_all_slocks(void)
+{
+	unsigned int cpu, i;
+
+	for (cpu = 0; cpu < NCPUS; cpu++) {
+		struct simple_locks_held *held = &simple_locks_held[cpu];
+
+		for (i = 0; i < held->count && i < NSLINFO; i++) {
+			simple_lock_t l = held->locks[i];
+
+			db_printf("cpu%u %u: %s (", cpu, i, l->expr);
+			db_printsym((uintptr_t) l, DB_STGY_ANY);
+			db_printf(") locked by %s\n", l->location);
+		}
+		if (held->count > NSLINFO)
+			db_printf("cpu%u: %u more\n", cpu,
+				  held->count - NSLINFO);
 	}
 }
 #else	/* MACH_SLOCKS && NCPUS == 1 */

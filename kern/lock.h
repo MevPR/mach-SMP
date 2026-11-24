@@ -59,12 +59,27 @@
  */
 
 #include <machine/lock.h>/*XXX*/
+
+/* Where a lock is taken, recorded by the debugging versions.  */
+#define XSTR(x)		#x
+#define STR(x)		XSTR(x)
+#define LOCATION	__FILE__ ":" STR(__LINE__)
+
 #if NCPUS > 1
 #if MACH_LOCK_MON == 0
+#if MACH_LDEBUG
+#define simple_lock_nocheck(l)	_simple_lock_ldebug((l), #l, LOCATION)
+#define simple_lock_try_nocheck(l) _simple_lock_try_ldebug((l), #l, LOCATION)
+#define simple_unlock_nocheck(l) _simple_unlock_ldebug(l)
+#else
 #define simple_lock_nocheck	_simple_lock
 #define simple_lock_try_nocheck	_simple_lock_try
 #define simple_unlock_nocheck	_simple_unlock
+#endif
 #else
+#if MACH_LDEBUG
+#error "Lock debugging and lock monitoring cannot be enabled together"
+#endif
 #define simple_lock_nocheck	simple_lock
 #define simple_lock_try_nocheck	simple_lock_try
 #define simple_unlock_nocheck	simple_unlock
@@ -83,6 +98,12 @@
 
 struct slock {
 	volatile natural_t lock_data;	/* in general 1 bit is sufficient */
+#if MACH_LDEBUG && NCPUS > 1
+	int		holder;		/* cpu_number () + 1 of the holder,
+					   0 when free */
+	const char	*expr;		/* what the holder locked, */
+	const char	*location;	/* and where */
+#endif
 	struct {} is_a_simple_lock;
 };
 
@@ -114,6 +135,29 @@ class	simple_lock_irq_data_t	name = { SIMPLE_LOCK_INITIALIZER(&name.lock) };
 
 #if	(NCPUS > 1)
 
+#if	MACH_LDEBUG
+/*
+ *	Record which processor holds each lock, so that we can tell
+ *	whether we hold it, and catch taking it again or releasing a
+ *	lock held by someone else.
+ */
+extern void		_simple_lock_ldebug(simple_lock_t,
+					    const char *, const char *);
+extern boolean_t	_simple_lock_try_ldebug(simple_lock_t,
+						const char *, const char *);
+extern void		_simple_unlock_ldebug(simple_lock_t);
+extern boolean_t	simple_lock_held(simple_lock_t);
+
+#undef	simple_lock_init
+#define	simple_lock_init(l) \
+	((l)->lock_data = 0, (l)->holder = 0)
+#define	simple_lock_taken(lock)		(simple_lock_assert(lock),	\
+					 simple_lock_held(lock))
+
+extern void		check_simple_locks(void);
+extern void		check_simple_locks_enable(void);
+extern void		check_simple_locks_disable(void);
+#else	/* MACH_LDEBUG */
 /*
  *	The single-CPU debugging routines are not valid
  *	on a multiprocessor.  We can still tell whether the lock is
@@ -124,6 +168,7 @@ class	simple_lock_irq_data_t	name = { SIMPLE_LOCK_INITIALIZER(&name.lock) };
 #define check_simple_locks()
 #define check_simple_locks_enable()
 #define check_simple_locks_disable()
+#endif	/* MACH_LDEBUG */
 
 #else	/* NCPUS > 1 */
 /*
@@ -139,10 +184,6 @@ extern boolean_t	_simple_lock_try(simple_lock_t,
 
 /* We provide simple_lock and simple_lock_try so that we can save the
    location.  */
-#define XSTR(x)		#x
-#define STR(x)		XSTR(x)
-#define LOCATION	__FILE__ ":" STR(__LINE__)
-
 #define simple_lock_nocheck(lock)	_simple_lock((lock), #lock, LOCATION)
 #define simple_lock_try_nocheck(lock)	_simple_lock_try((lock), #lock, LOCATION)
 #define simple_unlock_nocheck(lock)	_simple_unlock((lock))
