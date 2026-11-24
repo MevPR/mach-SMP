@@ -50,6 +50,7 @@
 
 expr	CALL_AST_CHECK
 expr	CALL_PMAP_UPDATE
+expr	CALL_HALT
 
 offset	ApicLocalUnit		lu	apic_id		APIC_ID
 

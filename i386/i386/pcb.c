@@ -710,10 +710,17 @@ kern_return_t thread_setstatus(
                             return KERN_INVALID_ARGUMENT;
 
                     state = (struct i386_fsgs_base_state *) tstate;
-                    if (state->gs_base & 0x8000000000000000UL)
-                            printf("WARNING: negative gs base not allowed\n");
+                    /*
+                     * Only accept user addresses: a non-canonical base
+                     * makes wrmsr fault in the kernel, and a negative
+                     * gs base would defeat the swapgs check on kernel
+                     * entry (see SWAPGS_ENTRY_IF_NEEDED_R12).
+                     */
+                    if (state->fs_base >= VM_MAX_USER_ADDRESS
+                        || state->gs_base >= VM_MAX_USER_ADDRESS)
+                            return KERN_INVALID_ARGUMENT;
                     thread->pcb->ims.sbs.fsbase = state->fs_base;
-                    thread->pcb->ims.sbs.gsbase = state->gs_base & 0x7fffffffffffffffUL;
+                    thread->pcb->ims.sbs.gsbase = state->gs_base;
                     if (thread == current_thread()) {
                             wrmsr(MSR_REG_FSBASE, state->fs_base);
                             wrmsr(MSR_REG_KGSBASE, state->gs_base);

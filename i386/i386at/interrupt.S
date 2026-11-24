@@ -59,6 +59,9 @@ ENTRY(interrupt)
 
 	cmpl	$CALL_AST_CHECK,%ecx	/* was this a SMP remote -> local ast request? */
 	je	_call_local_ast
+
+	cmpl	$CALL_HALT,%ecx		/* was this a SMP halt request? */
+	je	_call_halt
 #endif
 
 	movb	EXT(irqinfo)(,%ecx,2),%al	/* look up irq_info[irq].trigger */
@@ -152,6 +155,10 @@ _call_local_ast:
 	call	EXT(lapic_eoi)		/* lapic EOI */
 	call	EXT(ast_check)		/* AST check on this cpu */
 	jmp	_completed
+
+_call_halt:
+	call	EXT(lapic_eoi)		/* lapic EOI */
+	call	EXT(halt_cpu)		/* does not return */
 
 #endif
 END(interrupt)

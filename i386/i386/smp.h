@@ -26,6 +26,7 @@
 int smp_init(void);
 void smp_remote_ast(unsigned logical_id);
 void smp_pmap_update(unsigned logical_id);
+void smp_halt_other_cpus(void);
 int smp_startup_cpus(unsigned bsp_apic_id, phys_addr_t start_eip);
 
 #define cpu_pause() asm volatile ("pause" : : : "memory")

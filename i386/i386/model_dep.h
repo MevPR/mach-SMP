@@ -56,6 +56,11 @@ extern void halt_cpu (void) __attribute__ ((noreturn));
 extern void halt_all_cpus (boolean_t reboot) __attribute__ ((noreturn));
 
 /*
+ * Stop all processors but the current one.
+ */
+extern void halt_other_cpus (void);
+
+/*
  * Make cpu pause a bit.
  */
 extern void machine_relax (void);
