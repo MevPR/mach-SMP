@@ -41,7 +41,7 @@
 #include <device/cons.h>
 
 #if NCPUS>1
-simple_lock_irq_data_t Assert_print_lock;
+def_simple_lock_irq_data(static, Assert_print_lock)
 #endif
 
 static void
@@ -137,8 +137,8 @@ Panic(const char *file, int line, const char *fun, const char *s, ...)
 	va_list	listp;
 	spl_t spl;
 
-	panic_init();
-
+	/* Do not call panic_init here: another processor may be holding
+	   panic_lock.  It is statically initialized anyway.  */
 	spl = simple_lock_irq(&panic_lock);
 	if (panicstr) {
 	    if (cpu_number() != paniccpu) {
