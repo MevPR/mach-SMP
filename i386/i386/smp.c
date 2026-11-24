@@ -74,6 +74,25 @@ void smp_pmap_update(unsigned logical_id)
     smp_send_ipi(logical_id, CALL_PMAP_UPDATE);
 }
 
+/*
+ * Ask all other cpus to stop.  This only reaches cpus that have
+ * interrupts enabled.
+ */
+void smp_halt_other_cpus(void)
+{
+    unsigned long flags;
+
+    cpu_intr_save(&flags);
+
+    do {
+        cpu_pause();
+    } while(lapic->icr_low.delivery_status == SEND_PENDING);
+
+    apic_send_ipi(ALL_EXCLUDING_SELF, FIXED, PHYSICAL, ASSERT, EDGE, CALL_HALT, 0);
+
+    cpu_intr_restore(flags);
+}
+
 static void
 wait_for_ipi(void)
 {

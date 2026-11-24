@@ -278,10 +278,22 @@ void halt_cpu(void)
 }
 
 /*
+ * Stop all processors but the current one.
+ */
+void halt_other_cpus(void)
+{
+#if	NCPUS > 1 && !defined(MACH_HYP)
+	if (smp_get_numcpus() > 1)
+		smp_halt_other_cpus();
+#endif
+}
+
+/*
  * Halt the system or reboot.
  */
 void halt_all_cpus(boolean_t reboot)
 {
+	halt_other_cpus();
 	if (reboot) {
 #ifdef	MACH_HYP
 	    hyp_reboot();
