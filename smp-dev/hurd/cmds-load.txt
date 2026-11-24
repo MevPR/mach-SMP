@@ -1,0 +1,6 @@
+uname -a; nproc; grep ^cpu /proc/stat
+time sh -c 'for i in 1 2 3 4; do (dd if=/dev/zero of=/tmp/f$i bs=64k count=400 2>/dev/null; md5sum /tmp/f$i) & done; wait'
+time sh -c 'for i in 1 2; do (find /usr -xdev -type f | wc -l) & done; wait'
+time sh -c 'for i in 1 2 3 4; do (i=0; while [ $i -lt 20000 ]; do i=$((i+1)); done; echo loop$i) & done; wait'
+grep ^cpu /proc/stat
+rm -f /tmp/f1 /tmp/f2 /tmp/f3 /tmp/f4; sync; echo ok

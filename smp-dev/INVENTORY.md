@@ -118,3 +118,31 @@ selbst parallel laufen lassen (dort lauern eigene Races, s. u.).
    Threads über alle CPUs → reale Races in vm/ipc provozieren.
 4. Shootdown-Härtung (9–12), Idle-Wakeup (7), hpclock (15/16).
 5. Hurd-Server: libports-Refcounting, dann ext2fs/pfinet.
+
+---
+
+## Status (2026-11-24)
+
+Topic branches, each forked from `upstream`, patches in `../build/patches/`:
+
+| Branch | Content | State |
+|---|---|---|
+| `fsgs-base-check` | P0-1: reject kernel/non-canonical fs/gs bases + test | tested, not mailed |
+| `smp-lock-debug` | P2-18: `simple_lock_taken` on SMP, `can_sleep` guard, `--enable-ldebug` holder tracking | tested, not mailed |
+| `smp-stop-ipi` | P2-19: `CALL_HALT` IPI from `Panic`/`halt_all_cpus` (fixed vector; IF=0 spinners need NMI) | tested in QEMU, not mailed |
+| `percpu-volatile` | **new bug**: `percpu_get`/`percpu_ptr` not volatile → `cpu_number()` cached across `thread_sleep` | found by test-smp + ldebug, fixed |
+| `smp-default-pset` | P1-5: `tests/test-smp` (processor_assign + VM/IPC/shootdown/task stress), testlib race fix, `smp_pset=default` kernel option | tested |
+| `panic-lock` | `Panic` re-initialised `panic_lock` on every call | tested |
+| `smp-integration` | merge of all of the above, for stress testing | — |
+
+Results:
+- `make check` with `smp_pset=default` on 4 CPUs, with `--enable-ldebug`: all pass.
+- `test-smp` 3000 iterations on 8 CPUs with ldebug: pass.
+- Debian GNU/Hurd amd64 (2025-08-07 image) boots to login with the
+  integration kernel and `smp_pset=default` on 2 CPUs.
+
+Deferred:
+- Idle lost-wakeup (P1-7): needs an MD "check and halt atomically"
+  interface; `splsched` is not `cli` on PIC i386 and `halt_cpu` reuses
+  `machine_idle`.
+- i386 (32-bit) builds of the IPI changes are untested here.
