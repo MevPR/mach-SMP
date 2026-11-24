@@ -73,7 +73,13 @@ AC_DEFINE([MACH_IPC_DEBUG], [1], [MACH_IPC_DEBUG])
 AC_DEFINE([MACH_IPC_TEST], [0], [MACH_IPC_TEST])
 
 # Sanity-check locking.
-AC_DEFINE([MACH_LDEBUG], [0], [MACH_LDEBUG])
+AC_ARG_ENABLE([ldebug],
+  AS_HELP_STRING([--enable-ldebug], [enable lock debugging checks]))
+[if [ x"$enable_ldebug" = xyes ]; then]
+  AC_DEFINE([MACH_LDEBUG], [1], [MACH_LDEBUG])
+[else]
+  AC_DEFINE([MACH_LDEBUG], [0], [MACH_LDEBUG])
+[fi]
 
 # MP lock monitoring.  Registers use of locks, contention.  Depending on
 # hardware also records time spent with locks held.  Used in `kern/lock_mon.c'.
