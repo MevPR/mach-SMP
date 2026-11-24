@@ -217,7 +217,10 @@ void wait_thread_terminated(thread_t th)
   do {
     count = THREAD_BASIC_INFO_COUNT;
     err = thread_info(th, THREAD_BASIC_INFO, (thread_info_t)&info, &count);
-    if (err == MACH_SEND_INVALID_DEST)
+    /* thread_terminate first detaches the port from the thread, and
+       the port is only destroyed later, possibly while we are polling
+       from another processor.  */
+    if (err == MACH_SEND_INVALID_DEST || err == KERN_INVALID_ARGUMENT)
         break;
     ASSERT_RET(err, "error in thread_info");
     msleep(100); // don't poll continuously
