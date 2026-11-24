@@ -391,6 +391,7 @@ static void processor_doaction(processor_t processor)
 	thread_t			thread;
 	thread_t			prev_thread = THREAD_NULL;
 	boolean_t			have_pset_ref = FALSE;
+	boolean_t			was_empty;
 #endif	/* MACH_HOST */
 
 	/*
@@ -519,8 +520,10 @@ Restart_pset:
 	    pset_remove_processor(pset, processor);
 	    pset_unlock(pset);
 
+	    /* pset_add_processor clears empty, so look before.  */
+	    was_empty = new_pset->empty;
 	    pset_add_processor(new_pset, processor);
-	    if (new_pset->empty) {
+	    if (was_empty) {
 		/*
 		 *	Set all the threads loose.
 		 *
