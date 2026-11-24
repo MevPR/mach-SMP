@@ -18,7 +18,10 @@
 
 /*
  * Run threads of one task on all processors at once, doing VM and IPC
- * operations on the shared address space and port name space.
+ * operations on the shared address space and port name space, while
+ * one of them keeps changing the protection of memory that the others
+ * read, which needs TLB shootdowns on all the processors they run on,
+ * and another one creates and terminates tasks.
  */
 
 #include <mach/message.h>
@@ -34,11 +37,13 @@
 #define NWORKERS	8
 #define ITERATIONS	500
 #define MAXCPUS		64
+#define SHARED_PAGES	16
 
 static volatile int workers_done;
 static volatile unsigned long cpus_seen;
 
 static int ncpus;
+static vm_address_t shared;
 
 /*
  * The APs start in a processor set of their own: move every processor to
@@ -133,12 +138,58 @@ static void ipc_round(void)
   ASSERT_RET(err, "mach_port_mod_refs");
 }
 
+/* Read the shared pages, which stay readable whatever their protection.  */
+static void read_round(void)
+{
+  volatile long *p = (volatile long *) shared;
+  long sum = 0;
+
+  for (int i = 0; i < SHARED_PAGES; i++)
+    sum += p[i * vm_page_size / sizeof *p];
+  ASSERT(sum == SHARED_PAGES, "shared memory corrupted");
+}
+
+static void protect_round(void)
+{
+  int err;
+
+  err = vm_protect(mach_task_self(), shared, SHARED_PAGES * vm_page_size,
+                   FALSE, VM_PROT_READ);
+  ASSERT_RET(err, "vm_protect read");
+  err = vm_protect(mach_task_self(), shared, SHARED_PAGES * vm_page_size,
+                   FALSE, VM_PROT_READ | VM_PROT_WRITE);
+  ASSERT_RET(err, "vm_protect read/write");
+  /* Write again, so that the next downgrade has a TLB entry to flush.  */
+  for (int i = 0; i < SHARED_PAGES; i++)
+    ((volatile long *) shared)[i * vm_page_size / sizeof (long)] = 1;
+}
+
+static void task_round(void)
+{
+  task_t task;
+  int err;
+
+  err = task_create(mach_task_self(), FALSE, &task);
+  ASSERT_RET(err, "task_create");
+  err = task_terminate(task);
+  ASSERT_RET(err, "task_terminate");
+  err = mach_port_deallocate(mach_task_self(), task);
+  ASSERT_RET(err, "mach_port_deallocate");
+}
+
 static void worker(void *arg)
 {
+  long id = (long) arg;
+
   for (int i = 0; i < ITERATIONS; i++)
     {
+      if (id == 0)
+        protect_round();
+      else if (id == 1)
+        task_round();
       vm_round();
       ipc_round();
+      read_round();
       if (i % 16 == 0)
         note_cpu();
     }
@@ -152,8 +203,15 @@ static void worker(void *arg)
 int main(int argc, char *argv[], int envc, char *envp[])
 {
   int nseen = 0;
+  int err;
 
   assign_all_processors_to_default_pset();
+
+  err = vm_allocate(mach_task_self(), &shared, SHARED_PAGES * vm_page_size,
+                    TRUE);
+  ASSERT_RET(err, "vm_allocate");
+  for (int i = 0; i < SHARED_PAGES; i++)
+    ((volatile long *) shared)[i * vm_page_size / sizeof (long)] = 1;
 
   for (long i = 0; i < NWORKERS; i++)
     test_thread_start(mach_task_self(), worker, (void *) i);
