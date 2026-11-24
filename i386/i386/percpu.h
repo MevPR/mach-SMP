@@ -32,7 +32,7 @@ struct percpu;
 MACRO_BEGIN                         \
     typ val_;                       \
                                     \
-    asm("mov %%gs:%c[offs], %[dst]" \
+    asm volatile("mov %%gs:%c[offs], %[dst]" \
          : [dst] "=r" (val_)        \
          : [offs] "e" (__builtin_offsetof(struct percpu, stm)) \
          : );                       \
@@ -44,7 +44,7 @@ MACRO_END
 MACRO_BEGIN                         \
     typ *ptr_ = (typ *)__builtin_offsetof(struct percpu, stm); \
                                     \
-    asm("add %%gs:0, %[pointer]"    \
+    asm volatile("add %%gs:0, %[pointer]" \
          : [pointer] "+r" (ptr_)    \
          : /* No inputs */          \
          : );                       \
