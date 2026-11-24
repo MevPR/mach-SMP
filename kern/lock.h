@@ -116,10 +116,11 @@ class	simple_lock_irq_data_t	name = { SIMPLE_LOCK_INITIALIZER(&name.lock) };
 
 /*
  *	The single-CPU debugging routines are not valid
- *	on a multiprocessor.
+ *	on a multiprocessor.  We can still tell whether the lock is
+ *	held at all, even if not whether it is held by us.
  */
 #define	simple_lock_taken(lock)		(simple_lock_assert(lock),	\
-					 1)	/* always succeeds */
+					 (lock)->lock_data)
 #define check_simple_locks()
 #define check_simple_locks_enable()
 #define check_simple_locks_disable()
