@@ -492,7 +492,13 @@ comintr(int unit)
 	static char 		comoverrun = 0;
 	char			c, line, intr_id;
 	int			line_stat;
+	spl_t			s;
 
+	/*
+	 * The tty routines we call expect the tty to be locked, and the
+	 * top half may be running comstart on another processor.
+	 */
+	s = simple_lock_irq(&tp->t_lock);
 	while (! ((intr_id=(inb(INTR_ID(addr))&MASKi)) & 1))
 	    switch (intr_id) { 
 		case MODi: 
@@ -557,6 +563,7 @@ comintr(int unit)
 			}
 			break;
 		}
+	simple_unlock_irq(s, &tp->t_lock);
 }
 
 static void
@@ -666,24 +673,25 @@ int comtimer_interval = 5;
 void
 comtimer(void * param)
 {
-	spl_t	s = spltty();
+	spl_t	s;
 	struct tty *tp = com_tty;
 	int i, nch;
 
 	for (i = 0; i < NCOM; i++, tp++) {
-		if ((tp->t_state & TS_ISOPEN) == 0)
+		s = simple_lock_irq(&tp->t_lock);
+		if ((tp->t_state & TS_ISOPEN) == 0
+		    || !tp->t_outq.c_cc
+		    || ++comtimer_state[i] < 2) {
+			simple_unlock_irq(s, &tp->t_lock);
 			continue;
-		if (!tp->t_outq.c_cc)
-			continue;
-		if (++comtimer_state[i] < 2)
-			continue;
+		}
 		/* Its stuck */
-printf("Tty %p was stuck\n", tp);
 		nch = getc(&tp->t_outq);
 		outb(TXRX((uintptr_t)tp->t_addr), nch);
+		simple_unlock_irq(s, &tp->t_lock);
+		printf("Tty %p was stuck\n", tp);
 	}
 
-	splx(s);
 	timeout(comtimer, 0, comtimer_interval*hz);
 }
 
