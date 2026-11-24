@@ -44,3 +44,50 @@ or after "Using makefile-style concurrent boot in runlevel S.").
 
     docker run -d --name hangvm ... sh /hb/catch-gdb.sh /hb/smp-all.iso <kernel elf> 10
     docker exec hangvm gdb -batch -ex "file <elf>" -ex "target remote :1236" -ex "source /hb/susp.py"
+
+## Update 2026-11-25: two distinct userland hangs, both exposed by SMP
+
+A kernel built from branch `debug-hold-trace` (local only) records, per
+thread, the last 16 changes of `suspend_count` with line, caller and the
+current thread; `susphist.py` prints them.  Two different hang types were
+caught:
+
+### A. Mutual suspension of the two threads of a forked `/bin/sh` child
+
+```
+(/bin/sh(262)) M (main)   suspend_count 1 user_stop_count 1
+   ... _Xthread_suspend by S                     <- S stopped M
+(/bin/sh(262)) S (signal) suspend_count 1 user_stop_count 0
+   ... thread_abort(S) by M, thread_resume(S) by M,
+       thread_get_state(S) by M: hold +1, release never happens
+```
+
+M treats S as a thread to deliver a signal to (abort / resume /
+get_state, the sequence glibc's signal thread applies to its target),
+while S, the msgport thread, suspends M for the same purpose.  M blocks in
+`thread_get_state` → `thread_dowait(S)` holding S; S is waiting for M.
+Neither the kernel's suspend accounting nor IPC is wrong here: the kernel
+does what it is told.  The race is in glibc's Hurd signal code in a fresh
+fork child (two threads acting as signal thread at once); with real
+parallelism the two paths overlap, on UP they practically never do.
+
+### B. Root ext2fs stops itself
+
+29 of 30 ext2fs threads carry `task_suspend`+`thread_suspend`+`task_resume`
+(= `proc_dostop`); the remaining thread is the msgport thread.  That is
+glibc `hurd/hurdsig.c:suspend()`, i.e. ext2fs received a stop signal
+(SIGSTOP/SIGTSTP/SIGTTIN/SIGTTOU).  `_hurd_stopped` read from ext2fs memory
+(`ext2fs-sig.py`, using the 20261028 ext2fs.static whose symbols are in
+hurd-dbgsym) confirms the flag in such hangs.  Who sends the signal is
+still open.
+
+### Not a bug
+
+`lostt.py` reported threads "waiting with RCV_TIMEOUT but no timer"; that
+was a false positive: the mach_msg fast path (exactly SEND|RCV, no
+timeout) does not update `ith_option`, so the saved option is stale.
+
+### Real kernel bug found on the way
+
+`processor_doaction` never released threads held for an empty processor
+set (branch `pset-empty-release`, with `tests/test-pset`).
