@@ -50,6 +50,7 @@
 #include <kern/processor.h>
 #include <kern/queue.h>
 #include <kern/sched.h>
+#include <kern/startup.h>
 #include <kern/task.h>
 #include <kern/thread.h>
 #include <kern/printf.h>
@@ -80,6 +81,7 @@ void cpu_up(int cpu)
 {
 	struct machine_slot	*ms;
 	processor_t		processor;
+	processor_set_t		pset;
 	spl_t 			s;
 
 	processor = cpu_to_processor(cpu);
@@ -95,12 +97,17 @@ void cpu_up(int cpu)
 	ms = &machine_slot[cpu];
 	ms->running = TRUE;
 	machine_info.avail_cpus++;
+	pset = &default_pset;
 #if	MACH_HOST
-	if (cpu != 0)
-		pset_add_processor(slave_pset, processor);
-	else
+	/*
+	 *	Unless asked otherwise, keep the other processors aside, for
+	 *	userland to assign them where it wants.
+	 */
+	if (processor != master_processor
+	    && !kernel_cmdline_has("smp_pset=default"))
+		pset = slave_pset;
 #endif
-		pset_add_processor(&default_pset, processor);
+	pset_add_processor(pset, processor);
 	processor->state = PROCESSOR_RUNNING;
 	processor_unlock(processor);
 	splx(s);

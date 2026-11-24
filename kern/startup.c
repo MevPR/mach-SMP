@@ -88,6 +88,20 @@ extern char *kernel_cmdline;
  *
  *	Assumes that master_cpu is set.
  */
+boolean_t kernel_cmdline_has(const char *word)
+{
+	size_t len = strlen(word);
+	const char *p = kernel_cmdline;
+
+	while ((p = strstr(p, word)) != NULL) {
+		if ((p == kernel_cmdline || p[-1] == ' ')
+		    && (p[len] == '\0' || p[len] == ' '))
+			return TRUE;
+		p += len;
+	}
+	return FALSE;
+}
+
 void setup_main(void)
 {
 	thread_t		startup_thread;
