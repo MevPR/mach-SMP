@@ -25,4 +25,7 @@ extern void setup_main(void);
 void __attribute__((noreturn)) cpu_launch_first_thread(thread_t th);
 void start_kernel_threads(void);
 
+/* Whether WORD appears as a whole word on the kernel command line.  */
+extern boolean_t kernel_cmdline_has(const char *word);
+
 #endif /* _KERN_STARTUP_H_ */
