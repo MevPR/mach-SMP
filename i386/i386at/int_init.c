@@ -59,6 +59,10 @@ int_fill(struct real_gate *myidt)
 			      int_entry_table[i], KERNEL_CS,
 			      ACC_PL_K|ACC_INTR_GATE, 0);
 	i++;
+	fill_idt_gate(myidt, CALL_HALT,
+			      int_entry_table[i], KERNEL_CS,
+			      ACC_PL_K|ACC_INTR_GATE, 0);
+	i++;
 #endif
 #ifdef APIC
 	fill_idt_gate(myidt, IOAPIC_SPURIOUS_BASE,

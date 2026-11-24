@@ -150,6 +150,8 @@ Panic(const char *file, int line, const char *fun, const char *s, ...)
 	else {
 	    panicstr = s;
 	    paniccpu = cpu_number();
+	    /* Keep the other cpus from running on with broken state.  */
+	    halt_other_cpus();
 	}
 	simple_unlock_irq(spl, &panic_lock);
 	printf("panic ");

@@ -43,6 +43,9 @@
 /* Currently for TLB shootdowns */
 #define CALL_PMAP_UPDATE 0xfb
 
+/* Stop the cpu, for panic and shutdown */
+#define CALL_HALT 0xf9
+
 #include <i386/idt-gen.h>
 
 #ifndef __ASSEMBLER__
