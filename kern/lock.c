@@ -273,7 +273,8 @@ void lock_write(
 {
 	int	i;
 
-	check_simple_locks();
+	if (l->can_sleep)
+		check_simple_locks();
 	simple_lock(&l->interlock);
 
 	if (l->thread == current_thread()) {
@@ -375,7 +376,8 @@ void lock_read(
 {
 	int	i;
 
-	check_simple_locks();
+	if (l->can_sleep)
+		check_simple_locks();
 	simple_lock(&l->interlock);
 
 	if (l->thread == current_thread()) {
@@ -422,7 +424,8 @@ boolean_t lock_read_to_write(
 {
 	int	i;
 
-	check_simple_locks();
+	if (l->can_sleep)
+		check_simple_locks();
 	simple_lock(&l->interlock);
 
 	l->read_count--;
@@ -593,7 +596,8 @@ boolean_t lock_try_read(
 boolean_t lock_try_read_to_write(
 	lock_t	l)
 {
-	check_simple_locks();
+	if (l->can_sleep)
+		check_simple_locks();
 	simple_lock(&l->interlock);
 
 	if (l->thread == current_thread()) {
