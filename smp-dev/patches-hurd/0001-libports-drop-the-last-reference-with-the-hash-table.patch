@@ -1,0 +1,212 @@
+From afbd9c1ad8bebdb71092657210b53a269da9c7f6 Mon Sep 17 00:00:00 2001
+From: Magnus Reimann <magnus.reimann@mailbox.org>
+Date: Wed, 25 Nov 2026 02:29:01 +0100
+Subject: [PATCH hurd] libports: drop the last reference with the hash table
+ lock held
+
+ports_port_deref dropped the last hard reference, and only then
+_ports_complete_deallocate took _ports_htable_lock and checked that
+nobody had reacquired a reference through a lookup meanwhile.  Two
+threads can however both see the (hard 0, weak 1) transition: thread A
+drops its reference, thread B looks the port up, which brings it back to
+(1, 1), and drops it again.  Both then run _ports_complete_deallocate;
+once the first one has cleared pi->port_right, the second one skips the
+hash table part and frees pi a second time.
+
+With all processors running Hurd servers, this shows up as heap
+corruption in the root ext2fs: malloc hands out the same chunk twice,
+iohelp_dup_iouser then finds new->uids overwritten with NULL and
+faults, and the whole system hangs.
+
+Add refcounts_deref_unless_last and refcounts_deref_weak_unless, which
+decrement a count unless that would be the final transition, and do the
+final transition with _ports_htable_lock held for writing.  Lookups take
+references with that lock held for reading, so only one thread can ever
+see the port become unreferenced.  _ports_complete_deallocate is now
+called with the lock held and does not need to recheck.
+
+* libshouldbeinlibc/refcount.h (refcounts_deref_unless_last)
+(refcounts_deref_weak_unless): New functions.
+* libports/port-deref.c (ports_port_deref): Drop the last hard
+reference with _ports_htable_lock held.  Use ports_port_deref_weak for
+the dropweak case.
+* libports/port-deref-weak.c (ports_port_deref_weak): Drop a weak
+reference that may leave only the hash tables' one with
+_ports_htable_lock held.
+* libports/complete-deallocate.c (_ports_complete_deallocate): Expect
+_ports_htable_lock held for writing and release it.  Do not recheck
+the reference counts.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ libports/complete-deallocate.c | 15 ++++------
+ libports/port-deref-weak.c     | 11 +++++--
+ libports/port-deref.c          | 20 +++++++++----
+ libshouldbeinlibc/refcount.h   | 55 ++++++++++++++++++++++++++++++++++
+ 4 files changed, 84 insertions(+), 17 deletions(-)
+
+diff --git a/libports/complete-deallocate.c b/libports/complete-deallocate.c
+index a6fe0ee7..564842df 100644
+--- a/libports/complete-deallocate.c
++++ b/libports/complete-deallocate.c
+@@ -22,6 +22,9 @@
+ #include <assert-backtrace.h>
+ #include <hurd/ihash.h>
+ 
++/* Called with _ports_htable_lock held for writing, when only the
++   reference held by the hash tables is left on PI.  Releases
++   _ports_htable_lock.  */
+ void
+ _ports_complete_deallocate (struct port_info *pi)
+ {
+@@ -31,16 +34,6 @@ _ports_complete_deallocate (struct port_info *pi)
+     {
+       struct references result;
+ 
+-      pthread_rwlock_wrlock (&_ports_htable_lock);
+-      refcounts_references (&pi->refcounts, &result);
+-      if (result.hard > 0 || result.weak > 1)
+-        {
+-          /* A reference was reacquired through a hash table lookup.
+-             It's fine, we didn't touch anything yet.  */
+-          pthread_rwlock_unlock (&_ports_htable_lock);
+-          return;
+-        }
+-
+       hurd_ihash_locp_remove (&_ports_htable, pi->ports_htable_entry);
+       hurd_ihash_locp_remove (&pi->bucket->htable, pi->hentry);
+       /* Drop the reference held by the hash tables.  */
+@@ -52,6 +45,8 @@ _ports_complete_deallocate (struct port_info *pi)
+       assert_perror_backtrace (err);
+       pi->port_right = MACH_PORT_NULL;
+     }
++  else
++    pthread_rwlock_unlock (&_ports_htable_lock);
+ 
+   pthread_mutex_lock (&_ports_lock);
+ 
+diff --git a/libports/port-deref-weak.c b/libports/port-deref-weak.c
+index 93bea3cf..0445fef7 100644
+--- a/libports/port-deref-weak.c
++++ b/libports/port-deref-weak.c
+@@ -26,9 +26,16 @@ ports_port_deref_weak (void *portstruct)
+ {
+   struct port_info *pi = portstruct;
+   struct references result;
++
++  if (refcounts_deref_weak_unless (&pi->refcounts, 1, &result))
++    return;
++
++  /* We may be leaving only the reference held by the hash tables: see
++     ports_port_deref.  */
++  pthread_rwlock_wrlock (&_ports_htable_lock);
+   refcounts_deref_weak (&pi->refcounts, &result);
+   if (result.hard == 0 && result.weak == 1)
+-    /* Only the reference held by the hash tables is left, try to
+-       complete the deallocation.  */
+     _ports_complete_deallocate (pi);
++  else
++    pthread_rwlock_unlock (&_ports_htable_lock);
+ }
+diff --git a/libports/port-deref.c b/libports/port-deref.c
+index 86c27979..0be7bd5d 100644
+--- a/libports/port-deref.c
++++ b/libports/port-deref.c
+@@ -38,13 +38,23 @@ ports_port_deref (void *portstruct)
+       if (result.hard == 0 && result.weak > 1)
+         (*pi->class->dropweak_routine) (pi);
+ 
+-      refcounts_deref_weak (&pi->refcounts, &result);
++      ports_port_deref_weak (pi);
++      return;
+     }
+-  else
+-    refcounts_deref (&pi->refcounts, &result);
+ 
++  if (refcounts_deref_unless_last (&pi->refcounts, &result))
++    return;
++
++  /* We are dropping the last hard reference.  Do it with the hash table
++     lock held, so that nobody can reacquire one through a lookup in the
++     meantime: otherwise two threads could both see the port become
++     unreferenced, and both deallocate it.  */
++  pthread_rwlock_wrlock (&_ports_htable_lock);
++  refcounts_deref (&pi->refcounts, &result);
+   if (result.hard == 0 && result.weak == 1)
+-    /* Only the reference held by the hash tables is left, try to
+-       complete the deallocation.  */
++    /* Only the reference held by the hash tables is left: complete the
++       deallocation.  This releases _ports_htable_lock.  */
+     _ports_complete_deallocate (pi);
++  else
++    pthread_rwlock_unlock (&_ports_htable_lock);
+ }
+diff --git a/libshouldbeinlibc/refcount.h b/libshouldbeinlibc/refcount.h
+index 49457cd8..92e781d7 100644
+--- a/libshouldbeinlibc/refcount.h
++++ b/libshouldbeinlibc/refcount.h
+@@ -303,6 +303,61 @@ refcounts_deref_weak (refcounts_t *ref, struct references *result)
+     *result = r.references;
+ }
+ 
++/* Decrement the hard reference count of REF, unless REF holds exactly
++   one hard reference, in which case nothing is changed.  Return non-zero
++   if the count was decremented, and then write the result to RESULT if
++   it is not NULL.  This lets the caller drop the last hard reference
++   with some lock held.  This function uses atomic operations.  It is not
++   required to serialize calls to this function.  */
++REFCOUNT_EI int
++refcounts_deref_unless_last (refcounts_t *ref, struct references *result)
++{
++  const union _references op = { .references = REFCOUNT_REFERENCES (1, 0) };
++  union _references r, n;
++  r.value = __atomic_load_n (&ref->value, __ATOMIC_RELAXED);
++  do
++    {
++      assert_backtrace (r.references.hard != 0
++			|| !"refcount underflowed!");
++      if (r.references.hard == 1)
++	return 0;
++      n.value = r.value - op.value;
++    }
++  while (! __atomic_compare_exchange_n (&ref->value, &r.value, n.value, 1,
++					__ATOMIC_RELEASE, __ATOMIC_RELAXED));
++  if (result)
++    *result = n.references;
++  return 1;
++}
++
++/* Decrement the weak reference count of REF, unless that would leave
++   REF with no hard reference and LAST weak references, in which case
++   nothing is changed.  Return non-zero if the count was decremented,
++   and then write the result to RESULT if it is not NULL.  This function
++   uses atomic operations.  It is not required to serialize calls to
++   this function.  */
++REFCOUNT_EI int
++refcounts_deref_weak_unless (refcounts_t *ref, uint32_t last,
++			     struct references *result)
++{
++  const union _references op = { .references = REFCOUNT_REFERENCES (0, 1) };
++  union _references r, n;
++  r.value = __atomic_load_n (&ref->value, __ATOMIC_RELAXED);
++  do
++    {
++      assert_backtrace (r.references.weak != 0
++			|| !"refcount underflowed!");
++      if (r.references.hard == 0 && r.references.weak == last + 1)
++	return 0;
++      n.value = r.value - op.value;
++    }
++  while (! __atomic_compare_exchange_n (&ref->value, &r.value, n.value, 1,
++					__ATOMIC_RELEASE, __ATOMIC_RELAXED));
++  if (result)
++    *result = n.references;
++  return 1;
++}
++
+ /* Store the current reference counts of REF in RESULT.  This function
+    uses atomic operations.  It is not required to serialize calls to
+    this function.  */
+-- 
+2.54.0 (Apple Git-157)
+
