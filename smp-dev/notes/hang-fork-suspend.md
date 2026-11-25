@@ -293,3 +293,20 @@ run pass (12/12 vs 0/6).
 Fix: set `tcb->multiple_threads = 1` in `_hurd_tls_new`
 (sysdeps/mach/hurd/{x86_64,i386}/tls.h).  Patch
 `patches-hurd/0001-hurd-set-multiple_threads-in-new-threads-TCB.patch`.
+
+### Test of the fix
+
+Binary patch of Debian's libpthread.so.0.3 (2.41, 20250807; htl still
+lives there): at 0x66c3, `tcb->tcb = tcb` jumps to a 22-byte cave in the
+alignment gap after .fini (0xc248, executable segment) that also does
+`movl $1, 0x18(%rax)`.  Result on 2 vCPUs: mtstress workers report
+`multiple_threads=1` and every run passes (MALLOC_ARENA_MAX=1 no-pool,
+default, 8 threads), where the same runs failed every time before.
+
+Static binaries (ext2fs.static) carry their own copy of htl: relinked
+with `smp-dev/stress/tlsfix.c` and `-Wl,--wrap=_dl_allocate_tls`.
+
+Tools: `smp-dev/stress/mtstress.c` (malloc torture, modes),
+`smp-dev/stress/heapsim.c` (lll lock + brk-style heap without glibc
+malloc), gnumach tests test-tlb, test-fault, test-brk, test-lll,
+test-heap (branch tlb-shootdown-test).

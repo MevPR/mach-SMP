@@ -1,0 +1,49 @@
+From: Magnus Reimann <magnus.reimann@mailbox.org>
+Subject: [PATCH] hurd: Set multiple_threads in the TCB of new threads
+
+On x86, the catomic_* operations only use the lock prefix when
+tcbhead_t.multiple_threads is set in the current thread's TCB.  On the
+Hurd only _hurd_tls_init, for the main thread, sets it: the TCB of
+threads created by pthread_create comes from _dl_allocate_tls, which
+clears it, and _hurd_tls_new left it at 0.  These threads thus ran e.g.
+malloc's fastbin compare-and-exchange without lock, which is atomic on
+a single processor but not on SMP: a multithreaded program doing
+malloc/free on two processors corrupted its fastbins within seconds
+("malloc_consolidate(): unaligned fastbin chunk detected", "corrupted
+size vs. prev_size in fastbins"), and so did Hurd servers such as
+ext2fs.
+
+Set it in _hurd_tls_new.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ sysdeps/mach/hurd/i386/tls.h   | 3 +++
+ sysdeps/mach/hurd/x86_64/tls.h | 3 +++
+ 2 files changed, 6 insertions(+)
+
+diff --git a/sysdeps/mach/hurd/i386/tls.h b/sysdeps/mach/hurd/i386/tls.h
+--- a/sysdeps/mach/hurd/i386/tls.h
++++ b/sysdeps/mach/hurd/i386/tls.h
+@@ -295,6 +295,9 @@
+   HURD_TLS_DESC_DECL (desc, tcb);
+ 
+   tcb->tcb = tcb;
++  /* The catomic_* operations only use a lock prefix when this is set,
++     and they run in this new thread while others run too.  */
++  tcb->multiple_threads = 1;
+ 
+   if (HURD_SEL_LDT (sel))
+     err = __i386_set_ldt (child, sel, &desc, 1);
+diff --git a/sysdeps/mach/hurd/x86_64/tls.h b/sysdeps/mach/hurd/x86_64/tls.h
+--- a/sysdeps/mach/hurd/x86_64/tls.h
++++ b/sysdeps/mach/hurd/x86_64/tls.h
+@@ -168,6 +168,9 @@
+   struct i386_fsgs_base_state state;
+ 
+   tcb->tcb = tcb;
++  /* The catomic_* operations only use a lock prefix when this is set,
++     and they run in this new thread while others run too.  */
++  tcb->multiple_threads = 1;
+ 
+   /* Install the TCB address into FS base.  */
+   state.fs_base = (uintptr_t) tcb;
