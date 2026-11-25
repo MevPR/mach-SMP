@@ -5,6 +5,20 @@ git.savannah.gnu.org/git/hurd/gnumach.git) plus this directory.
 
 Patches meant for bug-hurd@gnu.org are developed on topic branches forked
 from `upstream`, so `git format-patch upstream` produces clean series.
+See the top-level [README.md](../README.md) for what was found and fixed.
+
+## Layout
+
+| Path | Content |
+|---|---|
+| `notes/hang-fork-suspend.md` | the investigation log: every hang and crash, how it was caught, root cause, test results |
+| `INVENTORY.md` | initial inventory of the SMP code and the agreed work order |
+| `outbox/` | patch series ready for upstream (gnumach, hurd, netdde, rumpkernel, glibc) and `send.sh` (dry run by default, `--send` to mail them) |
+| `patches-hurd/` | the userland patches as single files, including the libports variant adapted to Debian's hurd 0.9.git20250801 |
+| `stress/` | kernel stress scripts, and userland test programs for a running Hurd: `mtstress.c` (multithreaded malloc torture), `heapsim.c` (lock plus brk-style heap without glibc malloc), `tlsfix.c` (link-time workaround for the glibc `multiple_threads` bug in static binaries) |
+| `dbgmalloc.c` | quarantining malloc for Hurd servers (`-Wl,--wrap=malloc,...`): catches writes after free and double frees, keeps the last report in `dbgmalloc_last` for cores |
+| `hurd/` | booting and driving Debian GNU/Hurd amd64 under QEMU, and the gdb scripts used to analyse a hung system from the kernel (see below) |
+| `build.sh`, `Dockerfile` | the build container |
 
 ## Build and test
 
@@ -44,3 +58,21 @@ never modified: every boot uses a fresh qcow2 overlay.
 
 Under Rosetta, 4 emulated CPUs take well over 10 minutes to reach the
 login prompt; 2 are usable.
+
+## Analysing a hung Hurd from the kernel (`smp-dev/hurd/`)
+
+Boot with QEMU's gdb stub (`QEMU_EXTRA="-gdb tcp::1236"` for `drive.py`,
+or `catch-gdb.sh`, which leaves a hung VM running), attach gdb with the
+kernel image, then `source` one of:
+
+| Script | Shows |
+|---|---|
+| `ipcwait.py` | every thread blocked in `mach_msg`, with the port it waits on and queued messages |
+| `otherwait.py` | threads blocked anywhere else (kernel waits, exceptions) |
+| `susp.py`, `susphist.py`, `dostop.py` | suspend counts and who stopped whom |
+| `kstacks.py` | kernel stacks of the threads of given tasks |
+| `mkcore.py` | an ELF core of one task (`CORE_TASK`, `CORE_OUT`), readable by gdb with the task's binary (`set osabi GNU/Linux`) |
+| `uread.py`, `libmap.py`, `findbase.py` | user memory reads, shared library bases from the page hash |
+
+`corefull.sh` symbolizes a core with the Debian debug symbols
+(snapshot.debian.org, debian-ports 20250807).
