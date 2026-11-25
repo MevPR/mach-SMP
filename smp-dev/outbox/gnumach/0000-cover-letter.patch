@@ -1,0 +1,107 @@
+From 7f3932b65e3780c3efd07ed4eddae210419f601f Mon Sep 17 00:00:00 2001
+From: Magnus Reimann <magnus.reimann@mailbox.org>
+Date: Wed, 25 Nov 2026 19:43:53 +0100
+Subject: [PATCH gnumach 00/17] SMP fixes, lock debugging, and SMP tests
+
+Hello,
+
+This series comes out of running Debian GNU/Hurd amd64 with all
+processors in the default processor set, and stress testing it on 2
+and 4 vCPUs (QEMU).  It contains:
+
+- fixes for SMP bugs found on the way (01-05): per-cpu reads cached by
+  the compiler across thread_sleep, fs/gs bases accepted from user space
+  that make wrmsr fault or defeat the swapgs check, panic_lock
+  reinitialized on every panic, the com driver touching the tty without
+  its lock from the interrupt and timer handlers (swapped characters on
+  the serial console), and threads held for an empty processor set
+  never being released;
+- simple lock debugging that works on SMP (06-08);
+- stopping the other processors on panic and shutdown (09);
+- a smp_pset=default kernel option that puts the APs into the default
+  processor set at boot, so that ordinary tasks use them (12);
+- SMP tests (10, 11, 13-17): a stress test, and focused tests for TLB
+  shootdowns, concurrent zero-fill faults, brk-style shrinking and
+  growing while other processors have the pages in their TLB, glibc-style
+  low-level locks with gsync, and a malloc-like heap under one such lock.
+  test-tlb was checked to catch a kernel with the shootdown IPI removed
+  (millions of stale reads on 2 processors).
+
+Testing: every user test (18, the new ones included) passes on an SMP
+kernel (--enable-ncpus=8 --enable-apic, -smp 2) and on a uniprocessor
+kernel; both i386 configurations build with no new warnings.  With this
+series and the userland fixes sent separately to bug-hurd (hurd,
+netdde) and libc-alpha (glibc), Debian GNU/Hurd amd64 boots with
+smp_pset=default on 2 vCPUs and passes a parallel build/sort/tar/fork
+stress test 6 times out of 6.
+
+Patches 06-09 are larger; I am happy to split or rework them.
+
+This work was done together with Claude (an AI model by Anthropic),
+hence the Co-Authored-By trailers.
+
+Magnus Reimann (17):
+  x86: do not let the compiler cache per-cpu reads
+  x86_64: reject kernel and non-canonical fs/gs bases
+  debug: do not reinitialize panic_lock on every panic
+  com: lock the tty in the interrupt and timer handlers
+  machine: release threads held for an empty processor set
+  lock: make simple_lock_taken meaningful on SMP
+  lock: only check for held simple locks when the lock can sleep
+  lock: track simple lock holders on SMP with MACH_LDEBUG
+  smp: stop the other processors on panic and shutdown
+  tests: add an SMP stress test
+  tests: accept KERN_INVALID_ARGUMENT from a terminating thread
+  smp: add a smp_pset=default kernel option
+  tests: make test-smp exercise TLB shootdowns and task creation
+  tests: add test-tlb, check that TLB shootdowns reach all processors
+  tests: add test-fault and test-brk for concurrent faults and brk-style
+    remapping
+  tests: add test-lll, check mutual exclusion of glibc-style low-level
+    locks
+  tests: add test-heap, mimic a single malloc arena growing and
+    shrinking
+
+ configfrag.ac           |   8 +-
+ i386/i386/i386asm.sym   |   1 +
+ i386/i386/locore.S      |   1 +
+ i386/i386/model_dep.h   |   5 +
+ i386/i386/pcb.c         |  13 +-
+ i386/i386/percpu.h      |   4 +-
+ i386/i386/smp.c         |  19 +++
+ i386/i386/smp.h         |   1 +
+ i386/i386at/com.c       |  24 ++--
+ i386/i386at/idt.h       |   3 +
+ i386/i386at/int_init.c  |   4 +
+ i386/i386at/interrupt.S |   7 ++
+ i386/i386at/model_dep.c |  12 ++
+ kern/debug.c            |   8 +-
+ kern/lock.c             | 179 +++++++++++++++++++++++++++-
+ kern/lock.h             |  54 ++++++++-
+ kern/machine.c          |  20 +++-
+ kern/startup.c          |  14 +++
+ kern/startup.h          |   3 +
+ tests/test-brk.c        | 199 +++++++++++++++++++++++++++++++
+ tests/test-fault.c      | 164 +++++++++++++++++++++++++
+ tests/test-heap.c       | 257 ++++++++++++++++++++++++++++++++++++++++
+ tests/test-lll.c        | 182 ++++++++++++++++++++++++++++
+ tests/test-pset.c       |  97 +++++++++++++++
+ tests/test-smp.c        | 231 ++++++++++++++++++++++++++++++++++++
+ tests/test-threads.c    |  69 +++++++++++
+ tests/test-tlb.c        | 166 ++++++++++++++++++++++++++
+ tests/testlib.c         |   5 +-
+ tests/user-qemu.mk      |   9 +-
+ x86_64/interrupt.S      |   7 ++
+ x86_64/locore.S         |   1 +
+ 31 files changed, 1733 insertions(+), 34 deletions(-)
+ create mode 100644 tests/test-brk.c
+ create mode 100644 tests/test-fault.c
+ create mode 100644 tests/test-heap.c
+ create mode 100644 tests/test-lll.c
+ create mode 100644 tests/test-pset.c
+ create mode 100644 tests/test-smp.c
+ create mode 100644 tests/test-tlb.c
+
+-- 
+2.54.0 (Apple Git-157)
+

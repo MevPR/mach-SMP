@@ -1,0 +1,112 @@
+From c5e5c6d48afadb182426ee1a9644fcb627289d51 Mon Sep 17 00:00:00 2001
+From: Magnus Reimann <magnus.reimann@mailbox.org>
+Date: Tue, 24 Nov 2026 21:05:13 +0100
+Subject: [PATCH gnumach 12/17] smp: add a smp_pset=default kernel option
+
+With MACH_HOST, which SMP kernels enable, cpu_up puts every processor
+but the first in slave_pset, so that userland decides what runs on
+them, and until it does, everything runs on the boot processor.
+
+Add a smp_pset=default kernel command line option which puts all
+processors in the default processor set instead, so that a system can
+use all of them without any userland support, and so that the test
+suite can run on all processors.
+
+While at it, compare against master_processor rather than
+processor 0.
+
+* kern/startup.c (kernel_cmdline_has): New function.
+* kern/startup.h (kernel_cmdline_has): New declaration.
+* kern/machine.c: Include <kern/startup.h>.
+(cpu_up): Put the processor in default_pset if it is the master
+processor or smp_pset=default was given.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ kern/machine.c | 15 +++++++++++----
+ kern/startup.c | 14 ++++++++++++++
+ kern/startup.h |  3 +++
+ 3 files changed, 28 insertions(+), 4 deletions(-)
+
+diff --git a/kern/machine.c b/kern/machine.c
+index f3866a1f..731ab0f4 100644
+--- a/kern/machine.c
++++ b/kern/machine.c
+@@ -50,6 +50,7 @@
+ #include <kern/processor.h>
+ #include <kern/queue.h>
+ #include <kern/sched.h>
++#include <kern/startup.h>
+ #include <kern/task.h>
+ #include <kern/thread.h>
+ #include <kern/printf.h>
+@@ -80,6 +81,7 @@ void cpu_up(int cpu)
+ {
+ 	struct machine_slot	*ms;
+ 	processor_t		processor;
++	processor_set_t		pset;
+ 	spl_t 			s;
+ 
+ 	processor = cpu_to_processor(cpu);
+@@ -95,12 +97,17 @@ void cpu_up(int cpu)
+ 	ms = &machine_slot[cpu];
+ 	ms->running = TRUE;
+ 	machine_info.avail_cpus++;
++	pset = &default_pset;
+ #if	MACH_HOST
+-	if (cpu != 0)
+-		pset_add_processor(slave_pset, processor);
+-	else
++	/*
++	 *	Unless asked otherwise, keep the other processors aside, for
++	 *	userland to assign them where it wants.
++	 */
++	if (processor != master_processor
++	    && !kernel_cmdline_has("smp_pset=default"))
++		pset = slave_pset;
+ #endif
+-		pset_add_processor(&default_pset, processor);
++	pset_add_processor(pset, processor);
+ 	processor->state = PROCESSOR_RUNNING;
+ 	processor_unlock(processor);
+ 	splx(s);
+diff --git a/kern/startup.c b/kern/startup.c
+index 337cc328..69a17cf6 100644
+--- a/kern/startup.c
++++ b/kern/startup.c
+@@ -88,6 +88,20 @@ extern char *kernel_cmdline;
+  *
+  *	Assumes that master_cpu is set.
+  */
++boolean_t kernel_cmdline_has(const char *word)
++{
++	size_t len = strlen(word);
++	const char *p = kernel_cmdline;
++
++	while ((p = strstr(p, word)) != NULL) {
++		if ((p == kernel_cmdline || p[-1] == ' ')
++		    && (p[len] == '\0' || p[len] == ' '))
++			return TRUE;
++		p += len;
++	}
++	return FALSE;
++}
++
+ void setup_main(void)
+ {
+ 	thread_t		startup_thread;
+diff --git a/kern/startup.h b/kern/startup.h
+index 746792cd..a90a10c6 100644
+--- a/kern/startup.h
++++ b/kern/startup.h
+@@ -25,4 +25,7 @@ extern void setup_main(void);
+ void __attribute__((noreturn)) cpu_launch_first_thread(thread_t th);
+ void start_kernel_threads(void);
+ 
++/* Whether WORD appears as a whole word on the kernel command line.  */
++extern boolean_t kernel_cmdline_has(const char *word);
++
+ #endif /* _KERN_STARTUP_H_ */
+-- 
+2.54.0 (Apple Git-157)
+

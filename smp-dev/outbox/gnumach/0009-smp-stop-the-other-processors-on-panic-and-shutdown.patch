@@ -1,0 +1,265 @@
+From 5b716fa3a1d90022144442b447b29f2bb2af420d Mon Sep 17 00:00:00 2001
+From: Magnus Reimann <magnus.reimann@mailbox.org>
+Date: Tue, 24 Nov 2026 20:16:58 +0100
+Subject: [PATCH gnumach 09/17] smp: stop the other processors on panic and
+ shutdown
+
+When one processor panics, the others keep running: they keep
+scheduling threads on top of whatever state made the kernel panic,
+print over the panic message, and keep changing memory while the
+debugger is examining it.  halt_all_cpus likewise only stopped the
+calling processor.
+
+Add a CALL_HALT IPI, broadcast to all other processors, whose handler
+just calls halt_cpu.  Send it from Panic once the panicking processor
+is known, and from halt_all_cpus.
+
+The IPI is a fixed interrupt, so a processor spinning with interrupts
+disabled, e.g. on a deadlocked lock, does not get it; that would need
+an NMI handler.
+
+* i386/i386at/idt.h (CALL_HALT): New vector.
+* i386/i386/i386asm.sym (CALL_HALT): Export it.
+* i386/i386at/int_init.c (int_fill) [NCPUS > 1]: Set up its gate.
+* i386/i386/locore.S, x86_64/locore.S [NCPUS > 1]: Add its interrupt
+entry.
+* i386/i386at/interrupt.S, x86_64/interrupt.S (interrupt) [NCPUS > 1]:
+Dispatch it to halt_cpu.
+* i386/i386/smp.c (smp_halt_other_cpus): New function.
+* i386/i386/smp.h (smp_halt_other_cpus): New declaration.
+* i386/i386at/model_dep.c (halt_other_cpus): New function.
+(halt_all_cpus): Call it.
+* i386/i386/model_dep.h (halt_other_cpus): New declaration.
+* kern/debug.c (Panic): Call halt_other_cpus.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ i386/i386/i386asm.sym   |  1 +
+ i386/i386/locore.S      |  1 +
+ i386/i386/model_dep.h   |  5 +++++
+ i386/i386/smp.c         | 19 +++++++++++++++++++
+ i386/i386/smp.h         |  1 +
+ i386/i386at/idt.h       |  3 +++
+ i386/i386at/int_init.c  |  4 ++++
+ i386/i386at/interrupt.S |  7 +++++++
+ i386/i386at/model_dep.c | 12 ++++++++++++
+ kern/debug.c            |  2 ++
+ x86_64/interrupt.S      |  7 +++++++
+ x86_64/locore.S         |  1 +
+ 12 files changed, 63 insertions(+)
+
+diff --git a/i386/i386/i386asm.sym b/i386/i386/i386asm.sym
+index e1f5c6bb..b0744312 100644
+--- a/i386/i386/i386asm.sym
++++ b/i386/i386/i386asm.sym
+@@ -50,6 +50,7 @@
+ 
+ expr	CALL_AST_CHECK
+ expr	CALL_PMAP_UPDATE
++expr	CALL_HALT
+ 
+ offset	ApicLocalUnit		lu	apic_id		APIC_ID
+ 
+diff --git a/i386/i386/locore.S b/i386/i386/locore.S
+index 9d2c702c..7f890b11 100644
+--- a/i386/i386/locore.S
++++ b/i386/i386/locore.S
+@@ -742,6 +742,7 @@ INTERRUPT(63)
+ #if NCPUS > 1
+ INTERRUPT(CALL_AST_CHECK)
+ INTERRUPT(CALL_PMAP_UPDATE)
++INTERRUPT(CALL_HALT)
+ #endif
+ #ifdef APIC
+ /* Spurious interrupt, set irq number to vect number */
+diff --git a/i386/i386/model_dep.h b/i386/i386/model_dep.h
+index 16cf1dfb..c76ea0b5 100644
+--- a/i386/i386/model_dep.h
++++ b/i386/i386/model_dep.h
+@@ -55,6 +55,11 @@ extern void halt_cpu (void) __attribute__ ((noreturn));
+  */
+ extern void halt_all_cpus (boolean_t reboot) __attribute__ ((noreturn));
+ 
++/*
++ * Stop all processors but the current one.
++ */
++extern void halt_other_cpus (void);
++
+ /*
+  * Make cpu pause a bit.
+  */
+diff --git a/i386/i386/smp.c b/i386/i386/smp.c
+index 510fd4cb..265a7e0a 100644
+--- a/i386/i386/smp.c
++++ b/i386/i386/smp.c
+@@ -74,6 +74,25 @@ void smp_pmap_update(unsigned logical_id)
+     smp_send_ipi(logical_id, CALL_PMAP_UPDATE);
+ }
+ 
++/*
++ * Ask all other cpus to stop.  This only reaches cpus that have
++ * interrupts enabled.
++ */
++void smp_halt_other_cpus(void)
++{
++    unsigned long flags;
++
++    cpu_intr_save(&flags);
++
++    do {
++        cpu_pause();
++    } while(lapic->icr_low.delivery_status == SEND_PENDING);
++
++    apic_send_ipi(ALL_EXCLUDING_SELF, FIXED, PHYSICAL, ASSERT, EDGE, CALL_HALT, 0);
++
++    cpu_intr_restore(flags);
++}
++
+ static void
+ wait_for_ipi(void)
+ {
+diff --git a/i386/i386/smp.h b/i386/i386/smp.h
+index 13b01787..245a32dc 100644
+--- a/i386/i386/smp.h
++++ b/i386/i386/smp.h
+@@ -26,6 +26,7 @@
+ int smp_init(void);
+ void smp_remote_ast(unsigned logical_id);
+ void smp_pmap_update(unsigned logical_id);
++void smp_halt_other_cpus(void);
+ int smp_startup_cpus(unsigned bsp_apic_id, phys_addr_t start_eip);
+ 
+ #define cpu_pause() asm volatile ("pause" : : : "memory")
+diff --git a/i386/i386at/idt.h b/i386/i386at/idt.h
+index 19e0abe8..9050f77b 100644
+--- a/i386/i386at/idt.h
++++ b/i386/i386at/idt.h
+@@ -43,6 +43,9 @@
+ /* Currently for TLB shootdowns */
+ #define CALL_PMAP_UPDATE 0xfb
+ 
++/* Stop the cpu, for panic and shutdown */
++#define CALL_HALT 0xf9
++
+ #include <i386/idt-gen.h>
+ 
+ #ifndef __ASSEMBLER__
+diff --git a/i386/i386at/int_init.c b/i386/i386at/int_init.c
+index 5c8fce6d..6703ba8e 100644
+--- a/i386/i386at/int_init.c
++++ b/i386/i386at/int_init.c
+@@ -59,6 +59,10 @@ int_fill(struct real_gate *myidt)
+ 			      int_entry_table[i], KERNEL_CS,
+ 			      ACC_PL_K|ACC_INTR_GATE, 0);
+ 	i++;
++	fill_idt_gate(myidt, CALL_HALT,
++			      int_entry_table[i], KERNEL_CS,
++			      ACC_PL_K|ACC_INTR_GATE, 0);
++	i++;
+ #endif
+ #ifdef APIC
+ 	fill_idt_gate(myidt, IOAPIC_SPURIOUS_BASE,
+diff --git a/i386/i386at/interrupt.S b/i386/i386at/interrupt.S
+index 164b0939..78eb11ed 100644
+--- a/i386/i386at/interrupt.S
++++ b/i386/i386at/interrupt.S
+@@ -59,6 +59,9 @@ ENTRY(interrupt)
+ 
+ 	cmpl	$CALL_AST_CHECK,%ecx	/* was this a SMP remote -> local ast request? */
+ 	je	_call_local_ast
++
++	cmpl	$CALL_HALT,%ecx		/* was this a SMP halt request? */
++	je	_call_halt
+ #endif
+ 
+ 	movb	EXT(irqinfo)(,%ecx,2),%al	/* look up irq_info[irq].trigger */
+@@ -153,5 +156,9 @@ _call_local_ast:
+ 	call	EXT(ast_check)		/* AST check on this cpu */
+ 	jmp	_completed
+ 
++_call_halt:
++	call	EXT(lapic_eoi)		/* lapic EOI */
++	call	EXT(halt_cpu)		/* does not return */
++
+ #endif
+ END(interrupt)
+diff --git a/i386/i386at/model_dep.c b/i386/i386at/model_dep.c
+index 84c8c966..b2f6837f 100644
+--- a/i386/i386at/model_dep.c
++++ b/i386/i386at/model_dep.c
+@@ -277,11 +277,23 @@ void halt_cpu(void)
+ #endif	/* MACH_HYP */
+ }
+ 
++/*
++ * Stop all processors but the current one.
++ */
++void halt_other_cpus(void)
++{
++#if	NCPUS > 1 && !defined(MACH_HYP)
++	if (smp_get_numcpus() > 1)
++		smp_halt_other_cpus();
++#endif
++}
++
+ /*
+  * Halt the system or reboot.
+  */
+ void halt_all_cpus(boolean_t reboot)
+ {
++	halt_other_cpus();
+ 	if (reboot) {
+ #ifdef	MACH_HYP
+ 	    hyp_reboot();
+diff --git a/kern/debug.c b/kern/debug.c
+index b1ea830d..a5f9b8f7 100644
+--- a/kern/debug.c
++++ b/kern/debug.c
+@@ -150,6 +150,8 @@ Panic(const char *file, int line, const char *fun, const char *s, ...)
+ 	else {
+ 	    panicstr = s;
+ 	    paniccpu = cpu_number();
++	    /* Keep the other cpus from running on with broken state.  */
++	    halt_other_cpus();
+ 	}
+ 	simple_unlock_irq(spl, &panic_lock);
+ 	printf("panic ");
+diff --git a/x86_64/interrupt.S b/x86_64/interrupt.S
+index 4b2d0482..1aba76b4 100644
+--- a/x86_64/interrupt.S
++++ b/x86_64/interrupt.S
+@@ -59,6 +59,9 @@ ENTRY(interrupt)
+ 
+ 	cmpl	$CALL_AST_CHECK,%ecx	/* was this a SMP remote -> local ast request? */
+ 	je	_call_local_ast
++
++	cmpl	$CALL_HALT,%ecx		/* was this a SMP halt request? */
++	je	_call_halt
+ #endif
+ 
+ 	movb	EXT(irqinfo)(,%rcx,2),%al	/* look up irq_info[irq].trigger */
+@@ -150,5 +153,9 @@ _call_local_ast:
+ 	call	EXT(ast_check)		/* AST check on this cpu */
+ 	jmp	_completed
+ 
++_call_halt:
++	call	EXT(lapic_eoi)		/* lapic EOI */
++	call	EXT(halt_cpu)		/* does not return */
++
+ #endif
+ END(interrupt)
+diff --git a/x86_64/locore.S b/x86_64/locore.S
+index 31a57688..a79053ec 100644
+--- a/x86_64/locore.S
++++ b/x86_64/locore.S
+@@ -894,6 +894,7 @@ INTERRUPT(63)
+ #if NCPUS > 1
+ INTERRUPT(CALL_AST_CHECK)
+ INTERRUPT(CALL_PMAP_UPDATE)
++INTERRUPT(CALL_HALT)
+ #endif
+ #ifdef APIC
+ /* Spurious interrupt, set irq number to vect number */
+-- 
+2.54.0 (Apple Git-157)
+

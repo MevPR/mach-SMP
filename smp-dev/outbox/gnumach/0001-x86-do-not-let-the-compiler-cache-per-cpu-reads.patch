@@ -1,0 +1,54 @@
+From a9d2515548ac8f701bc3c8d92c51c69998594243 Mon Sep 17 00:00:00 2001
+From: Magnus Reimann <magnus.reimann@mailbox.org>
+Date: Tue, 24 Nov 2026 20:51:46 +0100
+Subject: [PATCH gnumach 01/17] x86: do not let the compiler cache per-cpu
+ reads
+
+percpu_get and percpu_ptr used plain asm statements with no memory
+operand, so the compiler considered them pure and was free to reuse
+their result across function calls.  In particular it may keep
+cpu_number () or current_processor () in a callee-saved register
+across thread_block or thread_sleep, after which the thread may run on
+another processor.
+
+This showed up with MACH_LDEBUG on SMP: lock_write keeps cpu_number ()
+in %r12 across thread_sleep, and the lock_check_no_interrupts() of the
+following simple_lock then reads in_interrupt[] of the processor the
+thread previously ran on, which may well be handling an interrupt at
+that time, and the assertion fails.
+
+Make the asm statements volatile, so that each use reads %gs again.
+
+* i386/i386/percpu.h (percpu_get, percpu_ptr) [NCPUS > 1]: Use asm
+volatile.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ i386/i386/percpu.h | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/i386/i386/percpu.h b/i386/i386/percpu.h
+index 637d2ca6..51ec1d9b 100644
+--- a/i386/i386/percpu.h
++++ b/i386/i386/percpu.h
+@@ -32,7 +32,7 @@ struct percpu;
+ MACRO_BEGIN                         \
+     typ val_;                       \
+                                     \
+-    asm("mov %%gs:%c[offs], %[dst]" \
++    asm volatile("mov %%gs:%c[offs], %[dst]" \
+          : [dst] "=r" (val_)        \
+          : [offs] "e" (__builtin_offsetof(struct percpu, stm)) \
+          : );                       \
+@@ -44,7 +44,7 @@ MACRO_END
+ MACRO_BEGIN                         \
+     typ *ptr_ = (typ *)__builtin_offsetof(struct percpu, stm); \
+                                     \
+-    asm("add %%gs:0, %[pointer]"    \
++    asm volatile("add %%gs:0, %[pointer]" \
+          : [pointer] "+r" (ptr_)    \
+          : /* No inputs */          \
+          : );                       \
+-- 
+2.54.0 (Apple Git-157)
+

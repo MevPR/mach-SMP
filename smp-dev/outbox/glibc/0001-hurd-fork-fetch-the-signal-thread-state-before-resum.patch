@@ -1,0 +1,76 @@
+From 37808bd563241529febeea7d362d5fc3a5334ec0 Mon Sep 17 00:00:00 2001
+From: Magnus Reimann <magnus.reimann@mailbox.org>
+Date: Wed, 25 Nov 2026 19:45:15 +0100
+Subject: [PATCH 1/2] hurd: fork: fetch the signal thread state before resuming
+ it
+
+_Fork stops the other threads with proc_dostop, copies the address
+space, and resumes them with resume_threads before setting up the
+child's threads.  Setting up the child's signal thread however calls
+thread_get_state on our own signal thread, twice (for the machine state
+and, on x86_64, in _hurd_tls_fork for the FS base).  thread_get_state
+holds the target and waits for it to stop.
+
+If the signal thread is meanwhile delivering a signal to the forking
+thread, e.g. SIGCHLD from an earlier child, post_signal first suspends
+that thread, and only then sees it is in a critical section and marks
+the signal pending.  The forking thread is suspended while waiting in
+thread_get_state, the signal thread is then stopped by the hold of
+thread_get_state on its way back to user space, and each waits for the
+other forever.
+
+This was seen with gnumach running all processors in the default
+processor set, as a sporadic hang of /bin/sh doing a command
+substitution during boot:
+
+  thread 1: __thread_get_state <- _Fork (_Fork.c:480) <- forkshell
+  thread 2: __thread_suspend <- post_signal (hurdsig.c:1013, SIGCHLD)
+            <- _S_msg_sig_post
+
+with the forking thread suspended by the signal thread (user stop
+count 1) and the signal thread held by thread_get_state (suspend count
+1, user stop count 0).  It can happen on a uniprocessor too, but the
+window is much smaller there.
+
+Resume the other threads only once the state of the signal thread has
+been fetched; it is still stopped by proc_dostop at that point.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Magnus Reimann <magnus.reimann@mailbox.org>
+---
+ sysdeps/mach/hurd/_Fork.c | 12 ++++++++----
+ 1 file changed, 8 insertions(+), 4 deletions(-)
+
+diff --git a/sysdeps/mach/hurd/_Fork.c b/sysdeps/mach/hurd/_Fork.c
+index d2e393a6..bca8f907 100644
+--- a/sysdeps/mach/hurd/_Fork.c
++++ b/sysdeps/mach/hurd/_Fork.c
+@@ -422,10 +422,6 @@ retry:
+ 	__spin_unlock (&_hurd_ports[i].lock);
+       ports_locked = 0;
+ 
+-      /* All state has now been copied from the parent.  It is safe to
+-	 resume other parent threads.  */
+-      resume_threads ();
+-
+       /* Create the child main user thread and signal thread.  */
+       if ((err = __thread_create (newtask, &thread))
+ 	  || (err = __thread_create (newtask, &sigthread)))
+@@ -511,6 +507,14 @@ retry:
+       /* We do not thread_resume SIGTHREAD here because the child
+ 	 fork needs to do more setup before it can take signals.  */
+ 
++      /* All state has now been copied from the parent.  It is safe to
++	 resume other parent threads.  We only do so now because we have
++	 just fetched the state of our signal thread: had it been running,
++	 it could have been suspending this very thread to deliver a
++	 signal while thread_get_state waits for it to stop, and both
++	 threads would wait for each other forever.  */
++      resume_threads ();
++
+       /* Set the child user thread up to return 1 from the setjmp above.  */
+       _hurd_longjmp_thread_state (&state, env, 1);
+ 
+-- 
+2.54.0 (Apple Git-157)
+

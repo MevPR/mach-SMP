@@ -1,0 +1,59 @@
+From 0041ef3cbf2a1fefc9158aced36d8a6ecfdad8ee Mon Sep 17 00:00:00 2001
+From: Magnus Reimann <magnus.reimann@mailbox.org>
+Date: Wed, 25 Nov 2026 19:43:53 +0100
+Subject: [PATCH hurd 0/4] Races in libports, libfshelp and libpager seen on SMP
+
+Hello,
+
+These are races in the Hurd libraries that showed up when running
+Debian GNU/Hurd amd64 with gnumach's processors all in the default
+processor set (see the gnumach series sent to bug-hurd), under a
+parallel build/sort/tar/fork stress test on 2 vCPUs:
+
+1-2. libports: two threads can both see a port become unreferenced and
+     both deallocate it; and ports_lookup_payload can take a reference
+     on a port_info that is being freed.
+3.   libfshelp: releasing a record lock freed it right after waking up
+     the threads blocked on it in F_SETLKW, which then touched freed
+     memory (found with a quarantining malloc in ext2fs, during flock on
+     /var/lib/wtmpdb/wtmp.db).
+4.   libpager: _pager_lock_object and pager_change_attributes used the
+     control port without the interlock while memory_object_terminate
+     could destroy it (gnumach: "task ext2fs looked up a bogus port ...
+     for 2095").
+
+Testing: the deployed Debian hurd 0.9.git20250801 was rebuilt in a
+Hurd VM with these changes (for libports adapted to that version, where
+the hash table holds no reference: the final transition is (0, 0)),
+and ext2fs.static was relinked with them.  With them, the glibc fix
+sent to libc-alpha and the netdde/libddekit timer fix, the stress test
+passes 6 times out of 6; before, the root ext2fs corrupted its heap or
+hung in most runs.  Patches 3 and 4 were compiled in that tree as they
+are here; 1 and 2 only in the adapted form.
+
+This work was done together with Claude (an AI model by Anthropic),
+hence the Co-Authored-By trailers.
+
+Magnus Reimann (4):
+  libports: drop the last reference with the hash table lock held
+  libports: do not free port_info under the feet of payload lookups
+  libfshelp: do not free a record lock under the feet of its waiters
+  libpager: do not use the control port while the object may terminate
+
+ libfshelp/rlock-drop-peropen.c | 17 ++++---
+ libfshelp/rlock-tweak.c        | 51 ++++++++++++---------
+ libfshelp/rlock.h              |  4 ++
+ libpager/lock-object.c         |  4 ++
+ libpager/pager-attr.c          | 13 ++++--
+ libports/complete-deallocate.c | 19 ++++----
+ libports/port-deref-deferred.c | 27 +++++++++--
+ libports/port-deref-deferred.h |  3 ++
+ libports/port-deref-weak.c     | 11 ++++-
+ libports/port-deref.c          | 20 ++++++--
+ libports/ports.h               |  8 +++-
+ libshouldbeinlibc/refcount.h   | 83 ++++++++++++++++++++++++++++++++++
+ 12 files changed, 203 insertions(+), 57 deletions(-)
+
+-- 
+2.54.0 (Apple Git-157)
+

@@ -1,0 +1,90 @@
+From ce8482a8d676127db6b8bf41f7466fc1af85f59e Mon Sep 17 00:00:00 2001
+From: Magnus Reimann <magnus.reimann@mailbox.org>
+Date: Tue, 24 Nov 2026 22:25:50 +0100
+Subject: [PATCH gnumach 04/17] com: lock the tty in the interrupt and timer
+ handlers
+
+The tty layer protects a tty with t_lock, and calls comstart with it
+held, but comintr and comtimer only raised the spl.  That is enough on
+a uniprocessor, but on SMP the device interrupts are taken by the boot
+processor while the top half runs on any processor: comintr and the
+top half then both run comstart, both take a character from the output
+queue and write it to the UART, which swaps adjacent characters
+("_ned_ eto know", "theF AQ", "sotfware" in the motd of a Debian
+GNU/Hurd system), and can lose TS_BUSY so that output stalls.  comintr
+also calls ttyinput, tt_write_wakeup and tty_cts, which expect the tty
+to be locked.
+
+Take t_lock in comintr and comtimer.  Print the "stuck" message after
+releasing it.
+
+* i386/i386at/com.c (comintr, comtimer): Take tp->t_lock.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ i386/i386at/com.c | 24 ++++++++++++++++--------
+ 1 file changed, 16 insertions(+), 8 deletions(-)
+
+diff --git a/i386/i386at/com.c b/i386/i386at/com.c
+index ed2d4d1a..043cbeed 100644
+--- a/i386/i386at/com.c
++++ b/i386/i386at/com.c
+@@ -492,7 +492,13 @@ comintr(int unit)
+ 	static char 		comoverrun = 0;
+ 	char			c, line, intr_id;
+ 	int			line_stat;
++	spl_t			s;
+ 
++	/*
++	 * The tty routines we call expect the tty to be locked, and the
++	 * top half may be running comstart on another processor.
++	 */
++	s = simple_lock_irq(&tp->t_lock);
+ 	while (! ((intr_id=(inb(INTR_ID(addr))&MASKi)) & 1))
+ 	    switch (intr_id) { 
+ 		case MODi: 
+@@ -557,6 +563,7 @@ comintr(int unit)
+ 			}
+ 			break;
+ 		}
++	simple_unlock_irq(s, &tp->t_lock);
+ }
+ 
+ static void
+@@ -666,24 +673,25 @@ int comtimer_interval = 5;
+ void
+ comtimer(void * param)
+ {
+-	spl_t	s = spltty();
++	spl_t	s;
+ 	struct tty *tp = com_tty;
+ 	int i, nch;
+ 
+ 	for (i = 0; i < NCOM; i++, tp++) {
+-		if ((tp->t_state & TS_ISOPEN) == 0)
+-			continue;
+-		if (!tp->t_outq.c_cc)
+-			continue;
+-		if (++comtimer_state[i] < 2)
++		s = simple_lock_irq(&tp->t_lock);
++		if ((tp->t_state & TS_ISOPEN) == 0
++		    || !tp->t_outq.c_cc
++		    || ++comtimer_state[i] < 2) {
++			simple_unlock_irq(s, &tp->t_lock);
+ 			continue;
++		}
+ 		/* Its stuck */
+-printf("Tty %p was stuck\n", tp);
+ 		nch = getc(&tp->t_outq);
+ 		outb(TXRX((uintptr_t)tp->t_addr), nch);
++		simple_unlock_irq(s, &tp->t_lock);
++		printf("Tty %p was stuck\n", tp);
+ 	}
+ 
+-	splx(s);
+ 	timeout(comtimer, 0, comtimer_interval*hz);
+ }
+ 
+-- 
+2.54.0 (Apple Git-157)
+

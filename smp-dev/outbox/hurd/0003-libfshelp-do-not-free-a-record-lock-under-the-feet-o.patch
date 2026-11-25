@@ -1,0 +1,205 @@
+From 441b7d406368b9ebcc2de5714b8c019a01153efe Mon Sep 17 00:00:00 2001
+From: Magnus Reimann <magnus.reimann@mailbox.org>
+Date: Wed, 25 Nov 2026 12:20:33 +0100
+Subject: [PATCH hurd 3/4] libfshelp: do not free a record lock under the feet
+ of its waiters
+
+rele_lock and fshelp_rlock_drop_peropen destroyed and freed a lock
+right after broadcasting its condition, while the threads blocked in
+F_SETLKW64 were still sleeping on it.  Those threads then woke up on
+freed memory, corrupting the heap (seen in ext2fs as a crash in
+fshelp_rlock_tweak under concurrent flock on the same file).
+
+Make WAITING a count of the sleepers.  A lock released while it has
+waiters is only marked DEAD, and the last waiter to wake up frees it.
+
+* libfshelp/rlock.h (struct rlock_list): Add DEAD, document WAITING.
+* libfshelp/rlock-tweak.c (rele_lock): Drop the WAKE_WAITERS
+parameter.  Defer freeing to the waiters when there are any.
+(fshelp_rlock_tweak): Do not reset WAITING when waking up waiters.
+Count waiters, and free a dead lock on the last wakeup.
+* libfshelp/rlock-drop-peropen.c (fshelp_rlock_drop_peropen): Likewise
+defer freeing locks that have waiters.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ libfshelp/rlock-drop-peropen.c | 17 +++++++-----
+ libfshelp/rlock-tweak.c        | 51 ++++++++++++++++++++--------------
+ libfshelp/rlock.h              |  4 +++
+ 3 files changed, 44 insertions(+), 28 deletions(-)
+
+diff --git a/libfshelp/rlock-drop-peropen.c b/libfshelp/rlock-drop-peropen.c
+index 86453dd7..2b293fd3 100644
+--- a/libfshelp/rlock-drop-peropen.c
++++ b/libfshelp/rlock-drop-peropen.c
+@@ -32,17 +32,20 @@ fshelp_rlock_drop_peropen (struct rlock_peropen *po)
+ 
+   for (l = *po->locks; l; l = t)
+     {
++      t = l->po.next;
++      list_unlink (node, l);
++
+       if (l->waiting)
+ 	{
+-	  l->waiting = 0;
++	  /* The waiters sleep on L->wait: let the last of them free L.  */
+ 	  pthread_cond_broadcast (&l->wait);
++	  l->dead = 1;
++	}
++      else
++	{
++	  pthread_cond_destroy (&l->wait);
++	  free (l);
+ 	}
+-
+-      list_unlink (node, l);
+-      pthread_cond_destroy(&l->wait);
+-
+-      t = l->po.next;
+-      free (l);
+     }
+ 
+   return 0;
+diff --git a/libfshelp/rlock-tweak.c b/libfshelp/rlock-tweak.c
+index d4235415..b38e5f04 100644
+--- a/libfshelp/rlock-tweak.c
++++ b/libfshelp/rlock-tweak.c
+@@ -62,17 +62,23 @@ fshelp_rlock_tweak (struct rlock_box *box, pthread_mutex_t *mutex,
+     }
+ 
+   inline struct rlock_list *
+-  rele_lock (struct rlock_list *l, int wake_waiters)
++  rele_lock (struct rlock_list *l)
+     {
+       struct rlock_list *next = l->po.next;
+       list_unlink (po, l);
+       list_unlink (node, l);
+ 
+-      if (wake_waiters && l->waiting)
+-	pthread_cond_broadcast (&l->wait);
+-
+-      pthread_cond_destroy(&l->wait);
+-      free (l);
++      if (l->waiting)
++	{
++	  /* The waiters sleep on L->wait: let the last of them free L.  */
++	  pthread_cond_broadcast (&l->wait);
++	  l->dead = 1;
++	}
++      else
++	{
++	  pthread_cond_destroy (&l->wait);
++	  free (l);
++	}
+       return next;
+     }
+ 
+@@ -99,7 +105,7 @@ fshelp_rlock_tweak (struct rlock_box *box, pthread_mutex_t *mutex,
+ 			   && l->start + l->len <= start + len)))
+ 	    /* We wrap the locked region; consume it.  */
+ 	    {
+-	      l = rele_lock (l, 1);
++	      l = rele_lock (l);
+ 	      continue;
+ 	    }
+ 	  else if (start <= l->start
+@@ -115,10 +121,7 @@ fshelp_rlock_tweak (struct rlock_box *box, pthread_mutex_t *mutex,
+ 	      l->start = start + len;
+ 
+ 	      if (l->waiting)
+-		{
+-		  l->waiting = 0;
+-		  pthread_cond_broadcast (&l->wait);
+-		}
++		pthread_cond_broadcast (&l->wait);
+ 	    }
+ 	  else if (l->start < start
+ 		   && ((start < l->start + l->len
+@@ -132,10 +135,7 @@ fshelp_rlock_tweak (struct rlock_box *box, pthread_mutex_t *mutex,
+ 	      l->len = start - l->start;
+ 
+ 	      if (l->waiting)
+-		{
+-		  l->waiting = 0;
+-		  pthread_cond_broadcast (&l->wait);
+-		}
++		pthread_cond_broadcast (&l->wait);
+ 	    }
+ 	  else if (l->start < start
+ 		   && (l->len == 0
+@@ -236,7 +236,7 @@ fshelp_rlock_tweak (struct rlock_box *box, pthread_mutex_t *mutex,
+ 		  if (! tail)
+ 		    {
+ 		      if (head)
+-			(void) rele_lock (head, 0);
++			(void) rele_lock (head);
+ 		      return ENOMEM;
+ 		    }
+ 		}
+@@ -259,7 +259,7 @@ fshelp_rlock_tweak (struct rlock_box *box, pthread_mutex_t *mutex,
+ 		  start = l->start;
+ 		  len = l->len;
+ 
+-		  l = rele_lock (l, 1);
++		  l = rele_lock (l);
+ 		  continue;
+ 		}
+ 	      else
+@@ -278,7 +278,7 @@ fshelp_rlock_tweak (struct rlock_box *box, pthread_mutex_t *mutex,
+ 
+ 	      if (type == l->type || type == F_WRLCK)
+ 		{
+-		  l = rele_lock (l, 1);
++		  l = rele_lock (l);
+ 		  /* Try to merge more.  */
+ 		  continue;
+ 		}
+@@ -327,7 +327,7 @@ fshelp_rlock_tweak (struct rlock_box *box, pthread_mutex_t *mutex,
+ 		    len += start - l->start;
+ 		  start = l->start;
+ 
+-		  l = rele_lock (l, 1);
++		  l = rele_lock (l);
+ 
+ 		  /* Try to merge in more.  */
+ 		  continue;
+@@ -537,8 +537,17 @@ retry:
+         {
+ 	  if (cmd == F_SETLKW64)
+ 	    {
+-	      e->waiting = 1;
+-	      if (pthread_hurd_cond_wait_np (&e->wait, mutex))
++	      int cancelled;
++
++	      e->waiting++;
++	      cancelled = pthread_hurd_cond_wait_np (&e->wait, mutex);
++	      if (--e->waiting == 0 && e->dead)
++		{
++		  /* E was released while we were waiting.  */
++		  pthread_cond_destroy (&e->wait);
++		  free (e);
++		}
++	      if (cancelled)
+ 	        return EINTR;
+ 	      goto retry;
+ 	    }
+diff --git a/libfshelp/rlock.h b/libfshelp/rlock.h
+index 32f006db..656788f7 100644
+--- a/libfshelp/rlock.h
++++ b/libfshelp/rlock.h
+@@ -45,8 +45,12 @@ struct rlock_list
+   struct rlock_linked_list node;
+   struct rlock_linked_list po;
+ 
++  /* Threads waiting for this lock to go away sleep on WAIT; WAITING
++     counts them.  A lock released while some are waiting is only marked
++     DEAD, and the last of them frees it when it wakes up.  */
+   pthread_cond_t wait;
+   int waiting;
++  int dead;
+ 
+   void *po_id;
+ };
+-- 
+2.54.0 (Apple Git-157)
+

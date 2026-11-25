@@ -1,0 +1,353 @@
+From 18da48152599a8feb3de6a4229c35cb4db94fe7c Mon Sep 17 00:00:00 2001
+From: Magnus Reimann <magnus.reimann@mailbox.org>
+Date: Tue, 24 Nov 2026 20:02:33 +0100
+Subject: [PATCH gnumach 08/17] lock: track simple lock holders on SMP with
+ MACH_LDEBUG
+
+On SMP kernels nothing checked simple lock usage: taking a lock twice
+on the same processor, for instance from an interrupt handler or
+through a forgotten unlock in an error path, just spins forever, and
+the deadlocks fixed recently (e.g. in mach_port_set_ktype and
+vm_page_seg_pull_cache_page) were only found by the machine hanging.
+
+When MACH_LDEBUG is enabled on SMP, record in each lock which
+processor holds it and where it was taken, and keep a per-processor
+list of the locks held.  Then panic with the location of both
+acquisitions when a processor takes a lock it already holds, when a
+lock is released by a processor that does not hold it, or when a
+thread blocks while holding simple locks.  simple_lock_taken now tells
+whether the current processor holds the lock.
+
+MACH_LDEBUG could not be enabled without editing configfrag.ac; add
+--enable-ldebug for it.  It is incompatible with MACH_LOCK_MON, which
+replaces the same entry points.
+
+* configfrag.ac (--enable-ldebug): New option, defines MACH_LDEBUG.
+* kern/lock.h (XSTR, STR, LOCATION): Define for all configurations.
+(simple_lock_nocheck, simple_lock_try_nocheck, simple_unlock_nocheck)
+[NCPUS > 1 && MACH_LDEBUG]: Use the debugging versions.
+[MACH_LOCK_MON && MACH_LDEBUG]: Error out.
+(struct slock) [MACH_LDEBUG && NCPUS > 1]: Add holder, expr and
+location fields.
+(simple_lock_init, simple_lock_taken, check_simple_locks)
+(check_simple_locks_enable, check_simple_locks_disable)
+[MACH_LDEBUG && NCPUS > 1]: Use the debugging versions.
+(_simple_lock_ldebug, _simple_lock_try_ldebug, _simple_unlock_ldebug)
+(simple_lock_held): New declarations.
+* kern/lock.c [MACH_LDEBUG && NCPUS > 1] (struct simple_locks_held)
+(simple_locks_held, do_check_simple_locks, simple_locks_failed): New
+variables.
+(simple_lock_failed, simple_lock_record, simple_lock_forget)
+(_simple_lock_ldebug, _simple_lock_try_ldebug, _simple_unlock_ldebug)
+(simple_lock_held, check_simple_locks, check_simple_locks_enable)
+(check_simple_locks_disable): New functions.
+(db_show_all_slocks): Print the locks held by each processor.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ configfrag.ac |   8 ++-
+ kern/lock.c   | 167 ++++++++++++++++++++++++++++++++++++++++++++++++++
+ kern/lock.h   |  49 +++++++++++++--
+ 3 files changed, 219 insertions(+), 5 deletions(-)
+
+diff --git a/configfrag.ac b/configfrag.ac
+index 81384847..146f8456 100644
+--- a/configfrag.ac
++++ b/configfrag.ac
+@@ -73,7 +73,13 @@ AC_DEFINE([MACH_IPC_DEBUG], [1], [MACH_IPC_DEBUG])
+ AC_DEFINE([MACH_IPC_TEST], [0], [MACH_IPC_TEST])
+ 
+ # Sanity-check locking.
+-AC_DEFINE([MACH_LDEBUG], [0], [MACH_LDEBUG])
++AC_ARG_ENABLE([ldebug],
++  AS_HELP_STRING([--enable-ldebug], [enable lock debugging checks]))
++[if [ x"$enable_ldebug" = xyes ]; then]
++  AC_DEFINE([MACH_LDEBUG], [1], [MACH_LDEBUG])
++[else]
++  AC_DEFINE([MACH_LDEBUG], [0], [MACH_LDEBUG])
++[fi]
+ 
+ # MP lock monitoring.  Registers use of locks, contention.  Depending on
+ # hardware also records time spent with locks held.  Used in `kern/lock_mon.c'.
+diff --git a/kern/lock.c b/kern/lock.c
+index 2540c236..ece4e2e2 100644
+--- a/kern/lock.c
++++ b/kern/lock.c
+@@ -230,6 +230,153 @@ void _simple_unlock(
+ 
+ #endif	/* MACH_SLOCKS && NCPUS == 1 */
+ 
++#if	MACH_LDEBUG && NCPUS > 1
++/*
++ *	Each processor keeps the list of the simple locks it holds, and
++ *	each lock records which processor holds it.
++ *
++ *	Interrupt handlers take and release locks in a stack-like
++ *	manner, but a lock may be released out of order, so the list is
++ *	only changed with interrupts disabled.
++ */
++
++#define	NSLINFO	32		/* locks recorded per processor */
++
++struct simple_locks_held {
++	unsigned int	count;
++	simple_lock_t	locks[NSLINFO];
++};
++
++static struct simple_locks_held simple_locks_held[NCPUS];
++static int do_check_simple_locks = 1;
++
++/* Set once a check failed, so that the panic path can take its locks.  */
++static volatile boolean_t simple_locks_failed;
++
++static void
++simple_lock_failed(simple_lock_t l, const char *problem,
++		   const char *expr, const char *location)
++{
++	int holder = l->holder;
++
++	if (simple_locks_failed)
++		return;
++	simple_locks_failed = TRUE;
++	panic("simple lock %s (%p) %s at %s; holder: cpu %d, %s at %s",
++	      expr ? expr : "?", l, problem, location ? location : "?",
++	      holder - 1,
++	      holder && l->expr ? l->expr : "?",
++	      holder && l->location ? l->location : "?");
++}
++
++static void
++simple_lock_record(simple_lock_t l, int me,
++		   const char *expr, const char *location)
++{
++	struct simple_locks_held *held = &simple_locks_held[me - 1];
++	spl_t s;
++
++	s = splhigh();
++	l->holder = me;
++	l->expr = expr;
++	l->location = location;
++	if (held->count < NSLINFO)
++		held->locks[held->count] = l;
++	held->count++;
++	splx(s);
++}
++
++static void
++simple_lock_forget(simple_lock_t l, int me)
++{
++	struct simple_locks_held *held = &simple_locks_held[me - 1];
++	unsigned int i, n;
++	spl_t s;
++
++	s = splhigh();
++	n = held->count < NSLINFO ? held->count : NSLINFO;
++	for (i = 0; i < n; i++)
++		if (held->locks[i] == l) {
++			/* Keep the list packed.  */
++			held->locks[i] = held->locks[n - 1];
++			held->locks[n - 1] = NULL;
++			break;
++		}
++	if (held->count > 0)
++		held->count--;
++	l->holder = 0;
++	splx(s);
++}
++
++void _simple_lock_ldebug(
++	simple_lock_t	l,
++	const char	*expression,
++	const char	*location)
++{
++	int me = cpu_number() + 1;
++
++	/* Nobody else stores our number, so this read is not racy.  */
++	if (l->holder == me)
++		simple_lock_failed(l, "taken again by the same cpu",
++				   expression, location);
++	_simple_lock(l);
++	simple_lock_record(l, me, expression, location);
++}
++
++boolean_t _simple_lock_try_ldebug(
++	simple_lock_t	l,
++	const char	*expression,
++	const char	*location)
++{
++	if (!_simple_lock_try(l))
++		return FALSE;
++	simple_lock_record(l, cpu_number() + 1, expression, location);
++	return TRUE;
++}
++
++void _simple_unlock_ldebug(
++	simple_lock_t	l)
++{
++	int me = cpu_number() + 1;
++
++	if (l->holder != me)
++		simple_lock_failed(l, l->lock_data
++				   ? "released, but held by another cpu"
++				   : "released, but not held",
++				   NULL, NULL);
++	simple_lock_forget(l, me);
++	_simple_unlock(l);
++}
++
++boolean_t simple_lock_held(
++	simple_lock_t	l)
++{
++	if (simple_locks_failed)
++		return l->lock_data != 0;
++	return l->holder == cpu_number() + 1;
++}
++
++void check_simple_locks(void)
++{
++	struct simple_locks_held *held = &simple_locks_held[cpu_number()];
++
++	if (do_check_simple_locks && held->count != 0)
++		simple_lock_failed(held->locks[0], "held while blocking",
++				   held->locks[0]->expr,
++				   held->locks[0]->location);
++}
++
++void check_simple_locks_enable(void)
++{
++	do_check_simple_locks = 1;
++}
++
++void check_simple_locks_disable(void)
++{
++	do_check_simple_locks = 0;
++}
++#endif	/* MACH_LDEBUG && NCPUS > 1 */
++
+ /*
+  *	Routine:	lock_init
+  *	Function:
+@@ -680,6 +827,26 @@ void db_show_all_slocks(void)
+ 		db_printf(") locked by %s\n", info->loc);
+ 	}
+ }
++#elif	MACH_LDEBUG && NCPUS > 1
++void db_show_all_slocks(void)
++{
++	unsigned int cpu, i;
++
++	for (cpu = 0; cpu < NCPUS; cpu++) {
++		struct simple_locks_held *held = &simple_locks_held[cpu];
++
++		for (i = 0; i < held->count && i < NSLINFO; i++) {
++			simple_lock_t l = held->locks[i];
++
++			db_printf("cpu%u %u: %s (", cpu, i, l->expr);
++			db_printsym((uintptr_t) l, DB_STGY_ANY);
++			db_printf(") locked by %s\n", l->location);
++		}
++		if (held->count > NSLINFO)
++			db_printf("cpu%u: %u more\n", cpu,
++				  held->count - NSLINFO);
++	}
++}
+ #else	/* MACH_SLOCKS && NCPUS == 1 */
+ void db_show_all_slocks(void)
+ {
+diff --git a/kern/lock.h b/kern/lock.h
+index 1fcc8cf1..393a71d2 100644
+--- a/kern/lock.h
++++ b/kern/lock.h
+@@ -59,12 +59,27 @@
+  */
+ 
+ #include <machine/lock.h>/*XXX*/
++
++/* Where a lock is taken, recorded by the debugging versions.  */
++#define XSTR(x)		#x
++#define STR(x)		XSTR(x)
++#define LOCATION	__FILE__ ":" STR(__LINE__)
++
+ #if NCPUS > 1
+ #if MACH_LOCK_MON == 0
++#if MACH_LDEBUG
++#define simple_lock_nocheck(l)	_simple_lock_ldebug((l), #l, LOCATION)
++#define simple_lock_try_nocheck(l) _simple_lock_try_ldebug((l), #l, LOCATION)
++#define simple_unlock_nocheck(l) _simple_unlock_ldebug(l)
++#else
+ #define simple_lock_nocheck	_simple_lock
+ #define simple_lock_try_nocheck	_simple_lock_try
+ #define simple_unlock_nocheck	_simple_unlock
++#endif
+ #else
++#if MACH_LDEBUG
++#error "Lock debugging and lock monitoring cannot be enabled together"
++#endif
+ #define simple_lock_nocheck	simple_lock
+ #define simple_lock_try_nocheck	simple_lock_try
+ #define simple_unlock_nocheck	simple_unlock
+@@ -83,6 +98,12 @@
+ 
+ struct slock {
+ 	volatile natural_t lock_data;	/* in general 1 bit is sufficient */
++#if MACH_LDEBUG && NCPUS > 1
++	int		holder;		/* cpu_number () + 1 of the holder,
++					   0 when free */
++	const char	*expr;		/* what the holder locked, */
++	const char	*location;	/* and where */
++#endif
+ 	struct {} is_a_simple_lock;
+ };
+ 
+@@ -114,6 +135,29 @@ class	simple_lock_irq_data_t	name = { SIMPLE_LOCK_INITIALIZER(&name.lock) };
+ 
+ #if	(NCPUS > 1)
+ 
++#if	MACH_LDEBUG
++/*
++ *	Record which processor holds each lock, so that we can tell
++ *	whether we hold it, and catch taking it again or releasing a
++ *	lock held by someone else.
++ */
++extern void		_simple_lock_ldebug(simple_lock_t,
++					    const char *, const char *);
++extern boolean_t	_simple_lock_try_ldebug(simple_lock_t,
++						const char *, const char *);
++extern void		_simple_unlock_ldebug(simple_lock_t);
++extern boolean_t	simple_lock_held(simple_lock_t);
++
++#undef	simple_lock_init
++#define	simple_lock_init(l) \
++	((l)->lock_data = 0, (l)->holder = 0)
++#define	simple_lock_taken(lock)		(simple_lock_assert(lock),	\
++					 simple_lock_held(lock))
++
++extern void		check_simple_locks(void);
++extern void		check_simple_locks_enable(void);
++extern void		check_simple_locks_disable(void);
++#else	/* MACH_LDEBUG */
+ /*
+  *	The single-CPU debugging routines are not valid
+  *	on a multiprocessor.  We can still tell whether the lock is
+@@ -124,6 +168,7 @@ class	simple_lock_irq_data_t	name = { SIMPLE_LOCK_INITIALIZER(&name.lock) };
+ #define check_simple_locks()
+ #define check_simple_locks_enable()
+ #define check_simple_locks_disable()
++#endif	/* MACH_LDEBUG */
+ 
+ #else	/* NCPUS > 1 */
+ /*
+@@ -139,10 +184,6 @@ extern boolean_t	_simple_lock_try(simple_lock_t,
+ 
+ /* We provide simple_lock and simple_lock_try so that we can save the
+    location.  */
+-#define XSTR(x)		#x
+-#define STR(x)		XSTR(x)
+-#define LOCATION	__FILE__ ":" STR(__LINE__)
+-
+ #define simple_lock_nocheck(lock)	_simple_lock((lock), #lock, LOCATION)
+ #define simple_lock_try_nocheck(lock)	_simple_lock_try((lock), #lock, LOCATION)
+ #define simple_unlock_nocheck(lock)	_simple_unlock((lock))
+-- 
+2.54.0 (Apple Git-157)
+

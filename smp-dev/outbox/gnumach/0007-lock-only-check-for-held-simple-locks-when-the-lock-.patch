@@ -1,0 +1,69 @@
+From cf841936e18552b5ed3d4ed00be26d94bda7a57c Mon Sep 17 00:00:00 2001
+From: Magnus Reimann <magnus.reimann@mailbox.org>
+Date: Tue, 24 Nov 2026 20:02:19 +0100
+Subject: [PATCH gnumach 07/17] lock: only check for held simple locks when the
+ lock can sleep
+
+lock_write, lock_read, lock_read_to_write and lock_try_read_to_write
+call check_simple_locks because they may sleep.  A lock initialized
+with can_sleep = FALSE only spins, and holding simple locks while
+taking it is fine: for instance vm_fault_page calls pmap_clear_modify
+with the object locked, which takes pmap_system_lock for writing on
+SMP.  Only run the check when the lock can actually sleep.
+
+* kern/lock.c (lock_write, lock_read, lock_read_to_write)
+(lock_try_read_to_write): Call check_simple_locks only if
+l->can_sleep.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ kern/lock.c | 12 ++++++++----
+ 1 file changed, 8 insertions(+), 4 deletions(-)
+
+diff --git a/kern/lock.c b/kern/lock.c
+index d23a2b47..2540c236 100644
+--- a/kern/lock.c
++++ b/kern/lock.c
+@@ -273,7 +273,8 @@ void lock_write(
+ {
+ 	int	i;
+ 
+-	check_simple_locks();
++	if (l->can_sleep)
++		check_simple_locks();
+ 	simple_lock(&l->interlock);
+ 
+ 	if (l->thread == current_thread()) {
+@@ -375,7 +376,8 @@ void lock_read(
+ {
+ 	int	i;
+ 
+-	check_simple_locks();
++	if (l->can_sleep)
++		check_simple_locks();
+ 	simple_lock(&l->interlock);
+ 
+ 	if (l->thread == current_thread()) {
+@@ -422,7 +424,8 @@ boolean_t lock_read_to_write(
+ {
+ 	int	i;
+ 
+-	check_simple_locks();
++	if (l->can_sleep)
++		check_simple_locks();
+ 	simple_lock(&l->interlock);
+ 
+ 	l->read_count--;
+@@ -593,7 +596,8 @@ boolean_t lock_try_read(
+ boolean_t lock_try_read_to_write(
+ 	lock_t	l)
+ {
+-	check_simple_locks();
++	if (l->can_sleep)
++		check_simple_locks();
+ 	simple_lock(&l->interlock);
+ 
+ 	if (l->thread == current_thread()) {
+-- 
+2.54.0 (Apple Git-157)
+

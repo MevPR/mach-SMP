@@ -1,0 +1,51 @@
+From 12dfd622394c040fbf627e8819d3a974c8378773 Mon Sep 17 00:00:00 2001
+From: Magnus Reimann <magnus.reimann@mailbox.org>
+Date: Tue, 24 Nov 2026 21:37:08 +0100
+Subject: [PATCH gnumach 03/17] debug: do not reinitialize panic_lock on every
+ panic
+
+Panic called panic_init, which reinitializes panic_lock and
+Assert_print_lock.  When two processors panic at about the same time,
+the second one thus releases the lock under the feet of the first one,
+and both go on as the panicking processor, interleaving their messages
+and both entering the debugger.
+
+panic_lock is statically initialized, so that panicking before
+panic_init is called works anyway.  Statically initialize
+Assert_print_lock too, and do not call panic_init from Panic.
+
+* kern/debug.c (Assert_print_lock): Define statically initialized.
+(Panic): Do not call panic_init.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ kern/debug.c | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/kern/debug.c b/kern/debug.c
+index a3bec815..b1ea830d 100644
+--- a/kern/debug.c
++++ b/kern/debug.c
+@@ -41,7 +41,7 @@
+ #include <device/cons.h>
+ 
+ #if NCPUS>1
+-simple_lock_irq_data_t Assert_print_lock;
++def_simple_lock_irq_data(static, Assert_print_lock)
+ #endif
+ 
+ static void
+@@ -137,8 +137,8 @@ Panic(const char *file, int line, const char *fun, const char *s, ...)
+ 	va_list	listp;
+ 	spl_t spl;
+ 
+-	panic_init();
+-
++	/* Do not call panic_init here: another processor may be holding
++	   panic_lock.  It is statically initialized anyway.  */
+ 	spl = simple_lock_irq(&panic_lock);
+ 	if (panicstr) {
+ 	    if (cpu_number() != paniccpu) {
+-- 
+2.54.0 (Apple Git-157)
+

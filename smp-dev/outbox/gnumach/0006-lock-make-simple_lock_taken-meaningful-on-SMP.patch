@@ -1,0 +1,42 @@
+From dbf14ee2c1ea4a1822133d65bb85d1bd12bcb8a9 Mon Sep 17 00:00:00 2001
+From: Magnus Reimann <magnus.reimann@mailbox.org>
+Date: Tue, 24 Nov 2026 20:02:19 +0100
+Subject: [PATCH gnumach 06/17] lock: make simple_lock_taken meaningful on SMP
+
+On multiprocessors simple_lock_taken always returned 1, so every
+assert (simple_lock_taken (...)), vm_object_lock_taken and
+vm_page_locked_queues was a no-op on SMP kernels, which are the ones
+where missing locks matter most.
+
+The lock word is 1 whenever someone holds the lock, so return it.
+This does not tell whether we hold the lock, but it catches the
+lock not being held at all.
+
+* kern/lock.h (simple_lock_taken) [NCPUS > 1]: Return the lock word.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ kern/lock.h | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/kern/lock.h b/kern/lock.h
+index 61781403..1fcc8cf1 100644
+--- a/kern/lock.h
++++ b/kern/lock.h
+@@ -116,10 +116,11 @@ class	simple_lock_irq_data_t	name = { SIMPLE_LOCK_INITIALIZER(&name.lock) };
+ 
+ /*
+  *	The single-CPU debugging routines are not valid
+- *	on a multiprocessor.
++ *	on a multiprocessor.  We can still tell whether the lock is
++ *	held at all, even if not whether it is held by us.
+  */
+ #define	simple_lock_taken(lock)		(simple_lock_assert(lock),	\
+-					 1)	/* always succeeds */
++					 (lock)->lock_data)
+ #define check_simple_locks()
+ #define check_simple_locks_enable()
+ #define check_simple_locks_disable()
+-- 
+2.54.0 (Apple Git-157)
+

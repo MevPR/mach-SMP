@@ -1,0 +1,40 @@
+From de52bbb5e71328d1af66be61f04259551c004c76 Mon Sep 17 00:00:00 2001
+From: Magnus Reimann <magnus.reimann@mailbox.org>
+Date: Tue, 24 Nov 2026 21:05:13 +0100
+Subject: [PATCH gnumach 11/17] tests: accept KERN_INVALID_ARGUMENT from a
+ terminating thread
+
+thread_terminate first detaches the thread port from the thread with
+ipc_thread_disable, and the port is only destroyed later.  In between,
+RPCs on the port fail with KERN_INVALID_ARGUMENT instead of
+MACH_SEND_INVALID_DEST.  On a uniprocessor wait_thread_terminated
+practically never polls in that window, but with the test's threads
+running on several processors it does, and test-machmsg fails.
+
+* tests/testlib.c (wait_thread_terminated): Also stop on
+KERN_INVALID_ARGUMENT.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ tests/testlib.c | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/tests/testlib.c b/tests/testlib.c
+index 77b34372..9f46b2c0 100644
+--- a/tests/testlib.c
++++ b/tests/testlib.c
+@@ -217,7 +217,10 @@ void wait_thread_terminated(thread_t th)
+   do {
+     count = THREAD_BASIC_INFO_COUNT;
+     err = thread_info(th, THREAD_BASIC_INFO, (thread_info_t)&info, &count);
+-    if (err == MACH_SEND_INVALID_DEST)
++    /* thread_terminate first detaches the port from the thread, and
++       the port is only destroyed later, possibly while we are polling
++       from another processor.  */
++    if (err == MACH_SEND_INVALID_DEST || err == KERN_INVALID_ARGUMENT)
+         break;
+     ASSERT_RET(err, "error in thread_info");
+     msleep(100); // don't poll continuously
+-- 
+2.54.0 (Apple Git-157)
+

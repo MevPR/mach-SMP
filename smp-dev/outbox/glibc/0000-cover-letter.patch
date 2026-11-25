@@ -1,0 +1,49 @@
+From adb8b8850e3031fdc29d359477c6d1d0f2c12da6 Mon Sep 17 00:00:00 2001
+From: Magnus Reimann <magnus.reimann@mailbox.org>
+Date: Wed, 25 Nov 2026 19:45:15 +0100
+Subject: [PATCH 0/2] hurd: Fix two races exposed by SMP
+
+Hello,
+
+These two Hurd fixes come out of running Debian GNU/Hurd amd64 with
+gnumach's processors all in the default processor set (2 vCPUs).
+
+Patch 2 is the important one: the TCB of threads created by
+pthread_create never got multiple_threads set, so on x86 every
+catomic_* operation ran without the lock prefix in all threads but the
+main one.  A small multithreaded malloc/free test aborts within seconds
+on 2 processors ("malloc_consolidate(): unaligned fastbin chunk
+detected", "corrupted size vs. prev_size in fastbins"), and never on
+one; multithreaded Hurd servers such as ext2fs corrupted their heaps.
+The worker threads of that test read 0 at %fs:0x18; setting it makes
+every run pass.
+
+Patch 1 fixes a deadlock between a forking thread and the signal
+thread, seen as a sporadic hang of /bin/sh during boot.
+
+Testing: both were tested on Debian's glibc 2.41 (snapshot 20250807)
+through binary patches: for patch 2 an equivalent one of
+libpthread.so.0.3 (htl still lives there in that build), plus
+ext2fs.static relinked with the same change; for patch 1 one that drops
+the early resume_threads call, so that the threads are resumed by the
+existing call after "lose:", i.e. somewhat later than this patch does,
+but likewise after the signal thread state was fetched.  With them and the gnumach/hurd fixes
+sent to bug-hurd, a parallel build/sort/tar/fork stress test passes 6
+times out of 6 on 2 vCPUs.  I have not rebuilt glibc from these exact
+sources.
+
+This work was done together with Claude (an AI model by Anthropic),
+hence the Co-Authored-By trailers.
+
+Magnus Reimann (2):
+  hurd: fork: fetch the signal thread state before resuming it
+  hurd: Set multiple_threads in the TCB of new threads
+
+ sysdeps/mach/hurd/_Fork.c      | 12 ++++++++----
+ sysdeps/mach/hurd/i386/tls.h   |  3 +++
+ sysdeps/mach/hurd/x86_64/tls.h |  3 +++
+ 3 files changed, 14 insertions(+), 4 deletions(-)
+
+-- 
+2.54.0 (Apple Git-157)
+
