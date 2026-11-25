@@ -15,6 +15,15 @@ Base: GNU Mach from git.savannah.gnu.org (branch `upstream`), Debian
 GNU/Hurd amd64 image 20250807.  The original GNU Mach README is unchanged
 in [`README`](README).
 
+| Repository | Component |
+|---|---|
+| **mach-SMP** (this one) | GNU Mach kernel; the investigation notes, tests and tools for the whole project |
+| [hurd-SMP](https://github.com/MevPR/hurd-SMP) | Hurd libraries (libports, libfshelp, libpager) |
+| [glibc-SMP](https://github.com/MevPR/glibc-SMP) | glibc's Hurd port |
+
+The netdde (libddekit) and rumpkernel fixes are patches against Debian
+packages and live in [`smp-dev/outbox/`](smp-dev/outbox) here.
+
 ## Status
 
 | | |
@@ -50,7 +59,8 @@ in [`README`](README).
 
 ### Hurd userland
 
-- **glibc: heap corruption in every multithreaded program.** The thread
+- **glibc: heap corruption in every multithreaded program**
+  ([glibc-SMP](https://github.com/MevPR/glibc-SMP)). The thread
   control block of new threads never got `multiple_threads` set, so
   glibc's conditionally atomic operations (used by malloc) ran without the
   `lock` prefix in all threads but the main one.  Harmless on one CPU,
@@ -59,7 +69,7 @@ in [`README`](README).
 - **glibc: fork deadlock.** `fork` resumed the signal thread before reading
   its state; the two threads could suspend each other (`/bin/sh` hung at
   boot).
-- **libports:** two threads could both free a port that became
+- **libports** ([hurd-SMP](https://github.com/MevPR/hurd-SMP)): two threads could both free a port that became
   unreferenced, and a message lookup could pick up a port being freed.
 - **libfshelp:** a file record lock was freed while threads were still
   waiting on it (`flock`).
