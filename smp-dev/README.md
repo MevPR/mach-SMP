@@ -7,6 +7,17 @@ Patches meant for bug-hurd@gnu.org are developed on topic branches forked
 from `upstream`, so `git format-patch upstream` produces clean series.
 See the top-level [README.md](../README.md) for what was found and fixed.
 
+## Branches
+
+| Branch | Content |
+|---|---|
+| `upstream` | mirror of git.savannah.gnu.org/git/hurd/gnumach.git |
+| `main` | `upstream` + README.md + this directory |
+| `submit-smp` | the 17-patch gnumach series as prepared for bug-hurd, linear on upstream master |
+| `percpu-volatile`, `fsgs-base-check`, `panic-lock`, `com-tty-lock`, `pset-empty-release`, `smp-lock-debug`, `smp-stop-ipi`, `smp-default-pset` | one topic each, forked from `upstream` |
+| `smp-tests` | `smp-default-pset` + the new SMP tests |
+| `smp-integration` | all topics merged: the kernel used for the Hurd boots and stress runs |
+
 ## Layout
 
 | Path | Content |
