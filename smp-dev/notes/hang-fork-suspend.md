@@ -344,3 +344,17 @@ Patch for Debian's rumpkernel: `outbox/rumpkernel/`.
 The "hang" of a pure busy-waiting variant of test-fault is not a bug:
 Mach's usage-based priorities make spinners that wait for each other
 rotate only about once a second (test-preempt shows preemption is fine).
+
+## Update 2026-11-26: static boot servers also carry the glibc bug
+
+pci-arbiter.static, acpi.static, rumpdisk.static and ext2fs.static each
+link their own copy of htl, so the libpthread.so binary patch does not
+reach them.  All four were relinked in the dev VM with
+`stress/tlsfix.c` (`testpatch/rebuild-tlsfix.sh`,
+`testpatch/rebuild-statics.sh`; the originals are kept in /root/orig).
+Until glibc is fixed, every multithreaded static Hurd binary needs this.
+
+To find the "deallocating a bogus port" caller, a local-only kernel
+(branch debug-bogus-port, not for upstream) prints the user registers
+and 48 words of user stack next to the message (`BOGUSPORT`/`BOGUSSTK`
+lines); ext2fs.static is static, so the addresses symbolize directly.
