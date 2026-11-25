@@ -27,6 +27,9 @@ git send-email $COMMON --to=bug-hurd@gnu.org --cc=$SAMUEL hurd/*.patch
 # netdde: libddekit timer thread sleeping forever (1 patch)
 git send-email $COMMON --to=bug-hurd@gnu.org --cc=$SAMUEL netdde/*.patch
 
+# rumpkernel (Debian package): bus_dma machine contiguity (1 patch)
+git send-email $COMMON --to=bug-hurd@gnu.org --cc=$SAMUEL rumpkernel/0001-*.patch
+
 # glibc: multiple_threads in new TCBs, fork/signal thread deadlock
 # (2 patches + cover letter), with DCO Signed-off-by lines.
 git send-email $COMMON --to=libc-alpha@sourceware.org --cc=bug-hurd@gnu.org \

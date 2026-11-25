@@ -327,3 +327,20 @@ ext2fs heap corruption.
 Left: once (run 18, during boot, after `/usr/bin/console` timed out),
 gnumach printed "task ext2fs deallocating a bogus port 946" - not
 analysed yet.
+
+## Update 2026-11-25 (6): rumpdisk D root-caused (rump bus_dma)
+
+`_bus_dmamap_load_buffer` (rumpdev_bus_dma.c) works on host virtual
+addresses (vtophys is the identity in rump) and converts to machine
+addresses only for segment starts.  The 64KiB boundary was checked on the
+virtual address, and chunks were coalesced when *virtually* contiguous
+and in the same 64KiB machine block, so a segment could describe machine
+pages that are not the buffer's: wrong-memory DMA, which pciide only
+catches when the bogus segment crosses 64KiB (the "buf align" panic).
+Host test harness (old vs new function, mock virt_to_mach, 200000 random
+buffers): old 14630 wrong mappings / 1873 crossings, new 0 / 0.
+Patch for Debian's rumpkernel: `outbox/rumpkernel/`.
+
+The "hang" of a pure busy-waiting variant of test-fault is not a bug:
+Mach's usage-based priorities make spinners that wait for each other
+rotate only about once a second (test-preempt shows preemption is fine).
