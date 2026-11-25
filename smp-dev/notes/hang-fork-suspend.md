@@ -127,4 +127,10 @@ of type A/B.
     pciide_dma: seg 0 addr 0x7976f200 len 0x1800 not properly aligned
     panic: pciide_dma: buf align
 
-Not investigated yet.
+Seen twice with the very same segment.  The address is suitably aligned;
+the problem is that 0xf200 + 0x1800 crosses a 64KiB boundary, which IDE
+bus-master DMA cannot do (NetBSD checks `(phys & ~0xffff) !=
+((phys + len - 1) & ~0xffff)`).  The rump kernel's bus_dmamap_load on the
+Hurd must split segments at the map's boundary (0x10000) and apparently
+does not.  This is a rumpkernel/rumpdisk bug, not SMP specific, but the
+changed timing/allocation pattern makes it show up.
