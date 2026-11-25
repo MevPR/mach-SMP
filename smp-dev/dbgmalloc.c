@@ -61,9 +61,26 @@ outhex (unsigned long v)
   out (buf + i);
 }
 
+/* The last report, for post-mortem inspection of a core when stderr
+   goes nowhere.  */
+struct
+{
+  const char *what;
+  struct hdr *h;
+  struct hdr copy;
+  size_t off;
+  void *caller;
+} dbgmalloc_last;
+
 static void
 report (const char *what, struct hdr *h, size_t off, void *caller)
 {
+  dbgmalloc_last.what = what;
+  dbgmalloc_last.h = h;
+  dbgmalloc_last.copy = *h;
+  dbgmalloc_last.off = off;
+  dbgmalloc_last.caller = caller;
+  __atomic_thread_fence (__ATOMIC_SEQ_CST);
   out ("\ndbgmalloc: ");
   out (what);
   out (" block ");
@@ -123,15 +140,18 @@ __wrap_free (void *ptr)
   if (ptr == NULL)
     return;
   h = (struct hdr *) ptr - 1;
-  if (h->magic == MAGIC_FREED)
-    report ("double free of", h, 0, __builtin_return_address (0));
-  if (h->magic != MAGIC_LIVE)
+  /* Claim the block atomically, so that two threads freeing it at the
+     same time cannot both get past this point.  */
+  uint64_t expect = MAGIC_LIVE;
+  if (! __atomic_compare_exchange_n (&h->magic, &expect, MAGIC_FREED, 0,
+				     __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
     {
+      if (expect == MAGIC_FREED)
+	report ("double free of", h, 0, __builtin_return_address (0));
       /* Not ours (e.g. from posix_memalign or glibc internals).  */
       __real_free (ptr);
       return;
     }
-  h->magic = MAGIC_FREED;
   h->free_caller = __builtin_return_address (0);
   memset (ptr, POISON, h->size);
 
@@ -180,6 +200,8 @@ __wrap_realloc (void *ptr, size_t size)
   p = __wrap_malloc (size);
   if (p == NULL)
     return NULL;
+  if (__atomic_load_n (&h->magic, __ATOMIC_ACQUIRE) != MAGIC_LIVE)
+    report ("realloc of freed", h, 0, __builtin_return_address (0));
   memcpy (p, ptr, h->size < size ? h->size : size);
   ((struct hdr *) p - 1)->alloc_caller = __builtin_return_address (0);
   __wrap_free (ptr);

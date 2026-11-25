@@ -244,3 +244,25 @@ gnumach logged `task ext2fs looked up a bogus port 652 for 2095` (2095 is
 the control port, and the name may be reused.  Fix: block termination
 around the request (`_pager_block_termination`), as data_request and
 data_return already do.  Patch `patches-hurd/0001-libpager-...`.
+
+### Stress results with F and G fixed
+
+Runs 8 and 10 clean.  Runs 9 and 11 hung (seq/sort/tar phase, all
+threads waiting for replies).  Run 11, kept alive and inspected: one
+root ext2fs thread trapped in `dbgmalloc report ("double free of")`:
+
+    _ports_complete_deallocate (protid) -> diskfs_protid_rele
+      -> iohelp_free_iouser -> idvec_free (iouser->gids) -> free (gids->ids)
+
+The 4-byte block in `gids->ids` had been freed ~7800 frees earlier as
+`uids->ids` of *another* iouser, still in quarantine.  So glibc's malloc
+returned one chunk to two `idvec_set` calls: hang E again, with the
+libports fix and both F fixes in place.  All 34 ext2fs threads have
+distinct fs bases in their PCBs (so not shared TLS / tcache).
+
+dbgmalloc v1 itself could hide the cause: its "already freed?" check was
+not atomic, so two threads freeing one block concurrently both put it
+into the ring, which later really frees it twice -> exactly a chunk
+handed out twice.  dbgmalloc v2 claims a block with a LIVE -> FREED
+compare-and-swap and keeps the last report in `dbgmalloc_last` for
+cores.  Next run should name the concurrent double free, if that is it.
