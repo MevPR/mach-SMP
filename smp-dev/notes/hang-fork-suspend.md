@@ -134,3 +134,26 @@ bus-master DMA cannot do (NetBSD checks `(phys & ~0xffff) !=
 Hurd must split segments at the map's boundary (0x10000) and apparently
 does not.  This is a rumpkernel/rumpdisk bug, not SMP specific, but the
 changed timing/allocation pattern makes it show up.
+
+### E. Root ext2fs crashes: the same heap chunk handed out twice
+
+Thread in `exception_raise_continue` in ext2fs (core + `corefull.sh`;
+note: glibc frames inside the static binary are mis-symbolized, Hurd
+library frames are right):
+
+    diskfs_S_dir_lookup("dev/urandom") -> diskfs_create_protid
+      -> diskfs_finish_protid -> iohelp_dup_iouser (iouser-dup.c:43)
+      -> idvec_set(dst = new->uids = NULL, ...)   page fault, cr2 = 0xc
+
+`iohelp_dup_iouser` checked `new->uids != NULL` just before.  The 32-byte
+chunk `new` (0x4000cb80, non-main arena) contains `{0x4000cb80, 0}`, i.e.
+`new->uids` points to `new` itself: `make_idvec` got the very chunk `new`
+from malloc again and initialised an idvec over it.  A chunk returned
+twice means it was freed twice earlier.
+
+Prime suspect: the libports race where two threads both see the
+(hard 0, weak 1) transition and both run `_ports_complete_deallocate`,
+which ends in `free (pi)` (libports/port-deref.c, complete-deallocate.c,
+lookup-port.c); with real parallelism the window between dropping the
+last hard reference and taking `_ports_htable_lock` for writing is open.
+Not yet confirmed by a fix + test (needs rebuilding the Hurd libraries).
