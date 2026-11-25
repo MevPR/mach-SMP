@@ -207,3 +207,40 @@ and an idle thread blocked in receive never does (seen as
 for EOF forever).  Replaced by: release immediately, defer only `free(pi)`,
 and make ports_lookup_payload refuse to resurrect a dying port
 (`refcounts_ref_unless_dying`).  Patch 0002-libports-....
+
+## Update 2026-11-25 (4): heap corruption under stress found (libfshelp), libpager race
+
+With every fix so far installed, a stress run (parallel gcc, sort, tar,
+find, fork loops, 2 vCPUs) still corrupted the root ext2fs heap.  ext2fs
+was relinked with a quarantine allocator (`hurdboot/dbgmalloc.c`, linked
+with `-Wl,--wrap=malloc,...`: freed blocks are poisoned with 0xa5 and kept
+in a ring).  It then faulted in `fshelp_rlock_tweak` (unlock_region)
+walking `l = 0xa5a5...` while serving `file_lock` on
+`/var/lib/wtmpdb/wtmp.db`.
+
+### F. libfshelp record locks: two use-after-free bugs
+
+1. `unlock_region` and its callers read `l->po.next` after `rele_lock (l)`
+   freed `l`.  Already fixed upstream on 2026-03-22 (8d021470, "libfshelp:
+   Free Memory Read errors after calls to rele_lock()"), but missing from
+   Debian's 0.9.git20250801, which is what crashed here.
+2. New: `rele_lock` and `fshelp_rlock_drop_peropen` broadcast a lock's
+   `wait` condition and then destroy and free the lock, while the
+   `F_SETLKW64` waiters are still asleep on it.  Their wake-up then
+   touches freed memory.  Fix: `waiting` counts the sleepers; a lock that
+   is released while it has waiters is only marked `dead`, and the last
+   waiter to wake up frees it.  Patch
+   `patches-hurd/0001-libfshelp-do-not-free-a-record-lock-...`.
+
+Both bugs are SMP-sensitive only in the sense that the waiters and the
+unlocker now really run at the same time.
+
+### G. libpager uses the control port while the object terminates
+
+gnumach logged `task ext2fs looked up a bogus port 652 for 2095` (2095 is
+`memory_object_change_attributes`).  `pager_change_attributes` and
+`_pager_lock_object` drop the interlock and then send on
+`p->memobjcntl`; `memory_object_terminate` can run in between, destroy
+the control port, and the name may be reused.  Fix: block termination
+around the request (`_pager_block_termination`), as data_request and
+data_return already do.  Patch `patches-hurd/0001-libpager-...`.

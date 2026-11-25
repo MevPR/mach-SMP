@@ -1,0 +1,84 @@
+From 0fc8682bc091ea9cf0419555f2d282e6a7170a81 Mon Sep 17 00:00:00 2001
+From: Magnus Reimann <magnus.reimann@mailbox.org>
+Date: Wed, 25 Nov 2026 12:22:09 +0100
+Subject: [PATCH] libpager: do not use the control port while the object may
+ terminate
+
+_pager_lock_object and pager_change_attributes release the interlock
+before sending their request on P->memobjcntl.  memory_object_terminate
+can be served meanwhile: it destroys the control port and the name can
+be reused, so the request goes to some unrelated port (gnumach then
+reports e.g. "task ext2fs looked up a bogus port 652 for 2095").
+
+Block termination around the request, as data_request and data_return
+already do.
+
+* libpager/lock-object.c (_pager_lock_object): Block termination while
+sending the lock request.
+* libpager/pager-attr.c (pager_change_attributes): Likewise for the
+attribute change.  Retake the interlock unconditionally.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ libpager/lock-object.c |  4 ++++
+ libpager/pager-attr.c  | 13 ++++++++-----
+ 2 files changed, 12 insertions(+), 5 deletions(-)
+
+diff --git a/libpager/lock-object.c b/libpager/lock-object.c
+index 01114ee2..141c294d 100644
+--- a/libpager/lock-object.c
++++ b/libpager/lock-object.c
+@@ -66,11 +66,15 @@ _pager_lock_object (struct pager *p,
+ 	}
+     }
+ 
++  /* Keep the object from being terminated, and P->memobjcntl from being
++     destroyed, while we use it without the interlock.  */
++  _pager_block_termination (p);
+   pthread_mutex_unlock (&p->interlock);
+   memory_object_lock_request (p->memobjcntl, offset, size, should_return,
+ 			      should_flush, lock_value, 
+ 			      sync ? p->port.port_right : MACH_PORT_NULL);
+   pthread_mutex_lock (&p->interlock);
++  _pager_allow_termination (p);
+   
+   if (sync)
+     {
+diff --git a/libpager/pager-attr.c b/libpager/pager-attr.c
+index 66c9b61f..5c93a6cc 100644
+--- a/libpager/pager-attr.c
++++ b/libpager/pager-attr.c
+@@ -78,14 +78,17 @@ pager_change_attributes (struct pager *p,
+ 	}
+     }      
+ 
++  /* Keep the object from being terminated, and P->memobjcntl from being
++     destroyed, while we use it without the interlock.  */
++  _pager_block_termination (p);
+   pthread_mutex_unlock (&p->interlock);
+   memory_object_change_attributes (p->memobjcntl, may_cache, copy_strategy,
+ 				   wait ? p->port.port_right : MACH_PORT_NULL);
+-  
++  pthread_mutex_lock (&p->interlock);
++  _pager_allow_termination (p);
++
+   if (wait)
+     {
+-      pthread_mutex_lock (&p->interlock);
+-
+       while (ar->attrs_pending)
+ 	pthread_cond_wait (&p->wakeup, &p->interlock);
+ 
+@@ -96,7 +99,7 @@ pager_change_attributes (struct pager *p,
+ 	    ar->next->prevp = ar->prevp;
+ 	  free (ar);
+ 	}
+-
+-      pthread_mutex_unlock (&p->interlock);
+     }
++
++  pthread_mutex_unlock (&p->interlock);
+ }
+-- 
+2.54.0 (Apple Git-157)
+
