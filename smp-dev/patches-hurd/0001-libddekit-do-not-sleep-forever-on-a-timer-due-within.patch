@@ -1,0 +1,59 @@
+From: Magnus Reimann <magnus.reimann@mailbox.org>
+Subject: [PATCH hurd] libddekit: do not sleep forever on a timer due within 1ms
+
+The timer thread computes how long to sleep until the first timer as
+
+    to = (timer_list->expires - jiffies) * 1000000 / HZ;
+    to /= 1000;
+
+and passes it to ddekit_sem_down_timed, for which a timeout of 0 means
+waiting without a timeout.  When the first timer is due in less than a
+millisecond, or already due (the unsigned difference then wraps), the
+timer thread can thus block forever with a pending timer, and no timer
+of the process ever runs again.
+
+This was seen on an SMP gnumach (all processors in the default
+processor set) as a sporadic boot hang of Debian GNU/Hurd amd64:
+netdde's only pending timer was e1000_watchdog (expires 225, id 2),
+the ddekit timer thread was in ddekit_sem_down_timed (timo=0), the
+e1000 link thus never came up (dev->state NOCARRIER, no packet ever
+sent), pfinet's timer thread was blocked in device_write while holding
+global_lock, and dhclient hung in socket_send.  With real parallelism
+the timer is more likely to be added right when the timer thread
+recomputes its timeout.
+
+Compute the difference as a signed number of jiffies, run due timers
+without sleeping, and round sub-millisecond waits up to 1ms.
+
+---
+--- a/libddekit/timer.c
++++ b/libddekit/timer.c
+@@ -289,16 +289,24 @@
+ 		unsigned long  to     = DDEKIT_TIMEOUT_NEVER;
+ 
+ 		if (timer_list) {
++			long jdiff = (long) (timer_list->expires - jiffies);
+ #if 0
+-			int jdiff = timer_list->expires - jiffies;
+ 			ddekit_printf("\033[31mscheduling new timeout.\033[0m\n");
+ 			ddekit_printf("\033[31mjiffies diff = %ld (%d s)\033[0m\n", jdiff, jdiff/HZ);
+ #endif
+-			to = (timer_list->expires - jiffies) * 1000000 / HZ;
+-			to /= 1000;
++			if (jdiff <= 0)
++				/* Already due: run it without sleeping.  */
++				to = 0;
++			else {
++				to = jdiff * 1000 / HZ;
++				/* A timeout of 0 would mean sleeping forever.  */
++				if (to == 0)
++					to = 1;
++			}
+ 		}
+ 
+-		__timer_sleep(to);
++		if (to)
++			__timer_sleep(to);
+ 
+ 		while ((timer = get_next_timer()) != NULL) {
+ 			ddekit_lock_unlock (&timer_lock);

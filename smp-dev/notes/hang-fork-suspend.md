@@ -91,3 +91,40 @@ timeout) does not update `ith_option`, so the saved option is stale.
 
 `processor_doaction` never released threads held for an empty processor
 set (branch `pset-empty-release`, with `tests/test-pset`).
+
+## Update 2026-11-25 (2): hang C root-caused, hang D seen
+
+### C. DHCP never completes: libddekit timer thread sleeps forever
+
+Chain (symbolized user backtraces from ELF cores of the hung tasks,
+`mkcore.py` + `corefull.sh`, sysroot and dbgsym from
+snapshot.debian.org/archive/debian-ports/20250807T000000Z):
+
+    dhclient (daemon child)  main -> send_discover -> sendto -> socket_send  (to pfinet)
+    pfinet RPC thread        S_socket_send -> pthread_mutex_lock(global_lock)
+    pfinet timer thread      addrconf_dad_timer -> ndisc_send_ns -> dev_queue_xmit
+                             -> ethernet_xmit -> device_write  (to netdde, holds global_lock)
+    netdde eth0 (e1000)      state START|PRESENT|NOCARRIER, qdisc noop, 0 packets ever
+    netdde ddekit timer      timer_list = { e1000_watchdog, expires 225 } but the
+                             timer thread waits in ddekit_sem_down_timed(timo=0)
+
+`ddekit_timer_thread` computes `to = (expires - jiffies) * 1000000 / HZ / 1000`,
+which is 0 for a timer due within 1ms (or already due), and
+`ddekit_sem_down_timed(sem, 0)` means *wait forever*.  The e1000 watchdog
+never runs, the link never comes up.  Fix: `patches-hurd/0001-libddekit-...`
+(libddekit is in the Debian hurd source and linked into libmachdevdde.so).
+
+Hardware/kernel side verified clean in the hung VM: IOAPIC pin 11 unmasked,
+no IRR / remote IRR, kernel user-intr entry for IRQ 11 n_unacked 0.
+
+Comparison series, 6 boots each, 2 vCPUs, `smp_pset=default`:
+original 1 DHCP hang; with the fix binary-patched into libmachdevdde.so
+(`je` -> `nop` at 0x3ee5, test only) 0 DHCP hangs, but see D and one hang
+of type A/B.
+
+### D. rumpdisk panics on a misaligned DMA buffer (once)
+
+    pciide_dma: seg 0 addr 0x7976f200 len 0x1800 not properly aligned
+    panic: pciide_dma: buf align
+
+Not investigated yet.
