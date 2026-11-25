@@ -7,5 +7,5 @@ Q=$!
 sleep $4
 tail -c 300 $3 | tr -d '\r'; echo
 gdb -q -batch -ex "set pagination off" -ex "file $5" -ex "target remote :1234" \
-  -ex "info threads" -ex "thread apply all bt 12" 2>&1 | grep -v "^warning"
+  -ex "info threads" -ex "thread apply all bt 25" 2>&1 | grep -v "^warning"
 kill $Q
