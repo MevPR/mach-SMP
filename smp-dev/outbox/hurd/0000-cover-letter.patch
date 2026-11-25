@@ -1,7 +1,7 @@
-From 0041ef3cbf2a1fefc9158aced36d8a6ecfdad8ee Mon Sep 17 00:00:00 2001
+From 55d2da7ed2672b2cacb3e4d74426b1b4c7515ae7 Mon Sep 17 00:00:00 2001
 From: Magnus Reimann <magnus.reimann@mailbox.org>
-Date: Wed, 25 Nov 2026 19:43:53 +0100
-Subject: [PATCH hurd 0/4] Races in libports, libfshelp and libpager seen on SMP
+Date: Thu, 26 Nov 2026 00:57:20 +0100
+Subject: [PATCH hurd 0/5] Races in libports, libfshelp, libpager and pflocal seen on SMP
 
 Hello,
 
@@ -21,6 +21,12 @@ parallel build/sort/tar/fork stress test on 2 vCPUs:
      control port without the interlock while memory_object_terminate
      could destroy it (gnumach: "task ext2fs looked up a bogus port ...
      for 2095").
+5.   pflocal: when a bound socket's last user port and its address port
+     went away together (processes dying at boot or shutdown),
+     sock_deref and addr_unbind both unbound the socket, and pflocal
+     aborted on assert_backtrace (!err) in sock_deref, taking down every
+     Unix socket of the system.  Seen in 3 of 4 boots on 2 vCPUs; none
+     in 6 boots with the fix.
 
 Testing: the deployed Debian hurd 0.9.git20250801 was rebuilt in a
 Hurd VM with these changes (for libports adapted to that version, where
@@ -28,17 +34,18 @@ the hash table holds no reference: the final transition is (0, 0)),
 and ext2fs.static was relinked with them.  With them, the glibc fix
 sent to libc-alpha and the netdde/libddekit timer fix, the stress test
 passes 6 times out of 6; before, the root ext2fs corrupted its heap or
-hung in most runs.  Patches 3 and 4 were compiled in that tree as they
+hung in most runs.  Patches 3 to 5 were compiled in that tree as they
 are here; 1 and 2 only in the adapted form.
 
 This work was done together with Claude (an AI model by Anthropic),
 hence the Co-Authored-By trailers.
 
-Magnus Reimann (4):
+Magnus Reimann (5):
   libports: drop the last reference with the hash table lock held
   libports: do not free port_info under the feet of payload lookups
   libfshelp: do not free a record lock under the feet of its waiters
   libpager: do not use the control port while the object may terminate
+  pflocal: unbind a socket with its address locked
 
  libfshelp/rlock-drop-peropen.c | 17 ++++---
  libfshelp/rlock-tweak.c        | 51 ++++++++++++---------
@@ -52,7 +59,9 @@ Magnus Reimann (4):
  libports/port-deref.c          | 20 ++++++--
  libports/ports.h               |  8 +++-
  libshouldbeinlibc/refcount.h   | 83 ++++++++++++++++++++++++++++++++++
- 12 files changed, 203 insertions(+), 57 deletions(-)
+ pflocal/sock.c                 | 76 ++++++++++++++++++++-----------
+ pflocal/sock.h                 | 14 ++++--
+ 14 files changed, 261 insertions(+), 89 deletions(-)
 
 -- 
 2.54.0 (Apple Git-157)

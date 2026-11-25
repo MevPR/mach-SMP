@@ -18,7 +18,7 @@ in [`README`](README).
 | Repository | Component |
 |---|---|
 | **mach-SMP** (this one) | GNU Mach kernel; the investigation notes, tests and tools for the whole project |
-| [hurd-SMP](https://github.com/MevPR/hurd-SMP) | Hurd libraries (libports, libfshelp, libpager) |
+| [hurd-SMP](https://github.com/MevPR/hurd-SMP) | Hurd libraries and servers (libports, libfshelp, libpager, pflocal) |
 | [hurd-glibc](https://github.com/MevPR/hurd-glibc) | glibc's Hurd port |
 
 The netdde (libddekit) and rumpkernel fixes are patches against Debian
@@ -73,6 +73,10 @@ packages and live in [`smp-dev/outbox/`](smp-dev/outbox) here.
   unreferenced, and a message lookup could pick up a port being freed.
 - **libfshelp:** a file record lock was freed while threads were still
   waiting on it (`flock`).
+- **pflocal:** when a socket and its address went away at the same time
+  (processes dying at boot or shutdown), both were unbound twice and the
+  Unix socket server aborted, taking every Unix socket of the system with
+  it.
 - **libpager:** the memory object control port was used while the object
   was being terminated.
 - **libddekit (netdde):** the driver timer thread could wait forever when

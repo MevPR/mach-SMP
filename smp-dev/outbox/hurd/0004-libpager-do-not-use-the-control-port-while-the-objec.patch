@@ -1,7 +1,7 @@
 From 0041ef3cbf2a1fefc9158aced36d8a6ecfdad8ee Mon Sep 17 00:00:00 2001
 From: Magnus Reimann <magnus.reimann@mailbox.org>
 Date: Wed, 25 Nov 2026 12:22:09 +0100
-Subject: [PATCH hurd 4/4] libpager: do not use the control port while the
+Subject: [PATCH hurd 4/5] libpager: do not use the control port while the
  object may terminate
 
 _pager_lock_object and pager_change_attributes release the interlock

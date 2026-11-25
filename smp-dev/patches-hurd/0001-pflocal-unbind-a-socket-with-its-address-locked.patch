@@ -1,0 +1,168 @@
+From fcd03b643488b96e03a0594e1574ad3f95041261 Mon Sep 17 00:00:00 2001
+From: Magnus Reimann <magnus.reimann@mailbox.org>
+Date: Wed, 25 Nov 2026 23:22:39 +0100
+Subject: [PATCH] pflocal: unbind a socket with its address locked
+
+When the last user port of a bound socket and the port of its address
+go away at the same time, as happens when processes die at shutdown,
+sock_deref (from sock_user_clean) and addr_unbind both unbind the
+socket.  sock_deref released the socket lock, then called
+sock_bind (sock, NULL), which found the socket already unbound and
+returned EINVAL, so that assert_backtrace (!err) aborted pflocal (seen
+on SMP at every few shutdowns).  Worse, sock_bind cleared
+old_addr->sock without holding the address lock, so that with other
+timings both paths unbound the socket, dropping the address' weak
+reference and the socket reference twice.
+
+Unbind in a separate function that locks the address before the
+socket, as addr_unbind does, and only unbinds if the socket is still
+bound to that address.  In sock_deref, accept that addr_unbind already
+did it, and free the socket only when its last reference goes.
+
+* pflocal/sock.c (sock_unbind): New function.
+(sock_bind): Use it when ADDR is NULL; simplify the binding path.
+* pflocal/sock.h (sock_deref): Accept EINVAL from sock_bind and do not
+assume that our reference is the last one.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ pflocal/sock.c | 76 ++++++++++++++++++++++++++++++++------------------
+ pflocal/sock.h | 14 ++++++----
+ 2 files changed, 58 insertions(+), 32 deletions(-)
+
+diff --git a/pflocal/sock.c b/pflocal/sock.c
+index 6adfbd71..33cca72b 100644
+--- a/pflocal/sock.c
++++ b/pflocal/sock.c
+@@ -278,50 +278,72 @@ addr_create (struct addr **addr)
+   return err;
+ }
+ 
+-/* Bind SOCK to ADDR.  */
++/* Unbind SOCK from its address.  Returns EINVAL if SOCK is not bound,
++   for instance because addr_unbind got there first.  */
++static error_t
++sock_unbind (struct sock *sock)
++{
++  error_t err = 0;
++  struct addr *addr;
++
++  /* Lock ADDR before SOCK, as addr_unbind does, and keep a weak reference
++     on it while we do not hold SOCK's lock.  */
++  pthread_mutex_lock (&sock->lock);
++  addr = sock->addr;
++  if (addr)
++    ports_port_ref_weak (addr);
++  pthread_mutex_unlock (&sock->lock);
++  if (! addr)
++    return EINVAL;
++
++  pthread_mutex_lock (&addr->lock);
++  pthread_mutex_lock (&sock->lock);
++  if (sock->addr == addr)
++    {
++      addr->sock = NULL;
++      sock->addr = NULL;
++      /* Whoever calls us holds a reference on SOCK as well.  */
++      sock->refs--;
++      assert_backtrace (sock->refs > 0);
++      ports_port_deref_weak (addr);
++    }
++  else
++    err = EINVAL;
++  pthread_mutex_unlock (&sock->lock);
++  pthread_mutex_unlock (&addr->lock);
++
++  ports_port_deref_weak (addr);
++  return err;
++}
++
++/* Bind SOCK to ADDR, or unbind it if ADDR is NULL.  */
+ error_t
+ sock_bind (struct sock *sock, struct addr *addr)
+ {
+   error_t err = 0;
+   struct addr *old_addr;
+ 
+-  if (addr)
+-    pthread_mutex_lock (&addr->lock);
++  if (! addr)
++    return sock_unbind (sock);
++
++  pthread_mutex_lock (&addr->lock);
+   pthread_mutex_lock (&sock->lock);
+ 
+   old_addr = sock->addr;
+-  if (addr && old_addr)
++  if (old_addr)
+     err = EINVAL;		/* SOCK already bound.  */
+-  else if (!addr && !old_addr)
+-    err = EINVAL;		/* SOCK already bound.  */
+-  else if (addr && addr->sock)
++  else if (addr->sock)
+     err = EADDRINUSE;		/* Something else already bound ADDR.  */
+-  else if (addr)
+-    addr->sock = sock;		/* First binding for SOCK.  */
+   else
+-    old_addr->sock = NULL;	/* Unbinding SOCK.  */
+-
+-  if (! err)
+     {
++      addr->sock = sock;	/* First binding for SOCK.  */
+       sock->addr = addr;
+-      if (addr)
+-	{
+-	  sock->refs++;
+-	  ports_port_ref_weak (addr);
+-	}
+-      if (old_addr)
+-	{
+-	  /* Note that we don't have to worry about SOCK's ref count going to
+-	     zero because whoever's calling us should be holding a ref.  */
+-	  sock->refs--;
+-	  ports_port_deref_weak (old_addr);
+-	  assert_backtrace (sock->refs > 0);	/* But make sure... */
+-	}
++      sock->refs++;
++      ports_port_ref_weak (addr);
+     }
+ 
+   pthread_mutex_unlock (&sock->lock);
+-  if (addr)
+-    pthread_mutex_unlock (&addr->lock);
++  pthread_mutex_unlock (&addr->lock);
+ 
+   return err;
+ }
+diff --git a/pflocal/sock.h b/pflocal/sock.h
+index 45a752a4..001b7434 100644
+--- a/pflocal/sock.h
++++ b/pflocal/sock.h
+@@ -143,15 +143,19 @@ sock_deref (struct sock *sock)
+       sock->refs++;
+       pthread_mutex_unlock (&sock->lock);
+ 
+-      /* Unbind */
++      /* Unbind.  This fails with EINVAL if addr_unbind, run for the address
++	 port going away at the same time, already did it; it then also
++	 drops the reference of the address, or is about to.  */
+       err = sock_bind (sock, NULL);
+-      assert_backtrace (!err);
++      assert_backtrace (!err || err == EINVAL);
+ 
+-      /* And release the ref, and thus kill SOCK.  */
++      /* And release our ref, killing SOCK if it was the last one.  */
+       pthread_mutex_lock (&sock->lock);
+       sock->refs--;
+-      assert_backtrace (sock->refs == 0);
+-      _sock_norefs (sock);
++      if (sock->refs == 0)
++	_sock_norefs (sock);
++      else
++	pthread_mutex_unlock (&sock->lock);
+     }
+   else
+     pthread_mutex_unlock (&sock->lock);
+-- 
+2.54.0 (Apple Git-157)
+

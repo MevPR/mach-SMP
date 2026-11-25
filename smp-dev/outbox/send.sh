@@ -21,7 +21,7 @@ COMMON="$MODE --confirm=never --suppress-cc=self --thread --no-chain-reply-to"
 # GNU Mach: SMP fixes, lock debugging, SMP tests (17 patches + cover letter)
 git send-email $COMMON --to=bug-hurd@gnu.org --cc=$SAMUEL gnumach/*.patch
 
-# Hurd: libports, libfshelp, libpager races (4 patches + cover letter)
+# Hurd: libports, libfshelp, libpager, pflocal races (5 patches + cover letter)
 git send-email $COMMON --to=bug-hurd@gnu.org --cc=$SAMUEL hurd/*.patch
 
 # netdde: libddekit timer thread sleeping forever (1 patch)

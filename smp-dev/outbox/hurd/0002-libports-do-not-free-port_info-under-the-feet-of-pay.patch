@@ -1,7 +1,7 @@
 From b144a65d4060bb8cd01f76a65edd140248d13e3a Mon Sep 17 00:00:00 2001
 From: Magnus Reimann <magnus.reimann@mailbox.org>
 Date: Wed, 25 Nov 2026 10:08:38 +0100
-Subject: [PATCH hurd 2/4] libports: do not free port_info under the feet of
+Subject: [PATCH hurd 2/5] libports: do not free port_info under the feet of
  payload lookups
 
 The port_info of a port is handed to the server threads as the

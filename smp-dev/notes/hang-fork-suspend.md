@@ -358,3 +358,24 @@ To find the "deallocating a bogus port" caller, a local-only kernel
 (branch debug-bogus-port, not for upstream) prints the user registers
 and 48 words of user stack next to the message (`BOGUSPORT`/`BOGUSSTK`
 lines); ext2fs.static is static, so the addresses symbolize directly.
+
+## Update 2026-11-26 (2): pflocal aborts when a socket and its address die together
+
+With the static servers fixed, the remaining failure was pflocal aborting
+(SIGABRT) at boot or shutdown in 3 of 4 runs.  Symbolized from the
+/hurd/crash PCs (libc at 0x97000, deduced from mach_msg_trap's return
+address): sock_user_clean -> sock_deref -> assert_backtrace -> abort.
+sock_deref, seeing only the address' reference left, dropped the socket
+lock and called sock_bind (sock, NULL); addr_unbind, run because the
+address port died too, unbound the socket meanwhile, so sock_bind
+returned EINVAL and `assert_backtrace (!err)` fired.  sock_bind also
+cleared old_addr->sock without the address lock, so other timings
+unbound twice (double weak deref of the address, double deref of the
+socket).  Fix (hurd-SMP `pflocal-unbind-race`, outbox/hurd/0005):
+unbind with the address locked before the socket, tolerate EINVAL in
+sock_deref.  Result: 6 / 6 runs (40-45) with stress test and shutdown,
+no pflocal abort, nothing else reported.
+
+"task ext2fs deallocating a bogus port" did not show up again in 8 runs
+with the tracing kernel since the static servers carry the glibc fix;
+it was most likely another effect of the heap corruption.
