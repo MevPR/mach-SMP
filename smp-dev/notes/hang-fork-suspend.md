@@ -157,3 +157,20 @@ which ends in `free (pi)` (libports/port-deref.c, complete-deallocate.c,
 lookup-port.c); with real parallelism the window between dropping the
 last hard reference and taking `_ports_htable_lock` for writing is open.
 Not yet confirmed by a fix + test (needs rebuilding the Hurd libraries).
+
+### Test of the libports fix (2026-11-25)
+
+The fix was adapted to the deployed hurd 0.9.git20250801 (where the hash
+table holds no weak reference and the final transition is (0, 0):
+`patches-hurd/libports-final-deref-for-0.9.git20250801.diff`), and
+ext2fs.static was rebuilt natively in a Hurd VM (container `devvm`,
+`apt-get build-dep hurd`, `configure --enable-static-progs=ext2fs
+MIG=x86_64-gnu-mig`).  Booted from the CD with the integration kernel,
+`smp_pset=default`, 2 vCPUs, on the image that also has the libddekit fix:
+
+    12 / 12 boots reached the login prompt
+
+Earlier series with `smp_pset=default` (without the libports fix):
+14 / 18.  Twelve successes in a row at that rate would happen by chance
+with p ~ 0.05.  Hang types A and B did not show up either; they may have
+been consequences of the same heap corruption, but that is not proven.

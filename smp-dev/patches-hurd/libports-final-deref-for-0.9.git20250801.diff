@@ -1,0 +1,90 @@
+diff -ru libports.orig/complete-deallocate.c libports/complete-deallocate.c
+--- libports.orig/complete-deallocate.c	2026-11-25 02:41:09
++++ libports/complete-deallocate.c	2026-11-25 02:41:09
+@@ -22,6 +22,8 @@
+ #include <assert-backtrace.h>
+ #include <hurd/ihash.h>
+ 
++/* Called with _ports_htable_lock held for writing, once PI has no
++   references left.  Releases _ports_htable_lock.  */
+ void
+ _ports_complete_deallocate (struct port_info *pi)
+ {
+@@ -29,20 +31,6 @@
+ 
+   if (MACH_PORT_VALID (pi->port_right))
+     {
+-      struct references result;
+-
+-      pthread_rwlock_wrlock (&_ports_htable_lock);
+-      refcounts_references (&pi->refcounts, &result);
+-      if (result.hard > 0 || result.weak > 0)
+-        {
+-          /* A reference was reacquired through a hash table lookup.
+-             It's fine, we didn't touch anything yet. */
+-          /* XXX: This really shouldn't happen.  */
+-          assert_backtrace (! "reacquired reference w/o send rights");
+-          pthread_rwlock_unlock (&_ports_htable_lock);
+-          return;
+-        }
+-
+       hurd_ihash_locp_remove (&_ports_htable, pi->ports_htable_entry);
+       hurd_ihash_locp_remove (&pi->bucket->htable, pi->hentry);
+       pthread_rwlock_unlock (&_ports_htable_lock);
+@@ -51,6 +39,8 @@
+ 			  MACH_PORT_RIGHT_RECEIVE, -1);
+       pi->port_right = MACH_PORT_NULL;
+     }
++  else
++    pthread_rwlock_unlock (&_ports_htable_lock);
+ 
+   pthread_mutex_lock (&_ports_lock);
+ 
+diff -ru libports.orig/port-deref-weak.c libports/port-deref-weak.c
+--- libports.orig/port-deref-weak.c	2026-11-25 02:41:09
++++ libports/port-deref-weak.c	2026-11-25 02:41:09
+@@ -26,7 +26,15 @@
+ {
+   struct port_info *pi = portstruct;
+   struct references result;
++
++  if (refcounts_deref_weak_unless (&pi->refcounts, 0, &result))
++    return;
++
++  /* We may be dropping the last reference: see ports_port_deref.  */
++  pthread_rwlock_wrlock (&_ports_htable_lock);
+   refcounts_deref_weak (&pi->refcounts, &result);
+   if (result.hard == 0 && result.weak == 0)
+     _ports_complete_deallocate (pi);
++  else
++    pthread_rwlock_unlock (&_ports_htable_lock);
+ }
+diff -ru libports.orig/port-deref.c libports/port-deref.c
+--- libports.orig/port-deref.c	2026-11-25 02:41:09
++++ libports/port-deref.c	2026-11-25 02:41:09
+@@ -38,11 +38,22 @@
+       if (result.hard == 0 && result.weak > 1)
+         (*pi->class->dropweak_routine) (pi);
+ 
+-      refcounts_deref_weak (&pi->refcounts, &result);
++      ports_port_deref_weak (pi);
++      return;
+     }
+-  else
+-    refcounts_deref (&pi->refcounts, &result);
+ 
++  if (refcounts_deref_unless_last (&pi->refcounts, &result))
++    return;
++
++  /* We may be dropping the last reference.  Do it with the hash table
++     lock held, so that nobody can reacquire one through a lookup in the
++     meantime: otherwise two threads could both see the port become
++     unreferenced, and both deallocate it.  */
++  pthread_rwlock_wrlock (&_ports_htable_lock);
++  refcounts_deref (&pi->refcounts, &result);
+   if (result.hard == 0 && result.weak == 0)
++    /* This releases _ports_htable_lock.  */
+     _ports_complete_deallocate (pi);
++  else
++    pthread_rwlock_unlock (&_ports_htable_lock);
+ }
