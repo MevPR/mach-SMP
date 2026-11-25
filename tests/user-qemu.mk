@@ -258,6 +258,7 @@ USER_TESTS := \
 	tests/test-thread-state \
 	tests/test-thread-state-fp \
 	tests/test-smp \
+	tests/test-tlb \
 	tests/test-pset
 
 USER_TESTS_CLEAN = $(subst tests/,clean-,$(USER_TESTS))
