@@ -1,0 +1,199 @@
+From 45c22dabe86fe03c95bd2dafbb03c0fd54037078 Mon Sep 17 00:00:00 2001
+From: Magnus Reimann <magnus.reimann@mailbox.org>
+Date: Wed, 25 Nov 2026 10:08:38 +0100
+Subject: [PATCH hurd 2/2] libports: do not free port_info under the feet of
+ payload lookups
+
+The port_info of a port is handed to the server threads as the
+protected payload of the messages, and ports_lookup_payload takes a
+reference on it without any lock.  A thread may however dequeue a
+message, and another one handle the no-senders notification that
+follows it and free the port_info, before the first one calls
+ports_lookup_payload: it then increments the reference count of freed
+memory.  With several processors this shows up as heap corruption in
+the root ext2fs ("malloc(): unaligned fastbin chunk detected").
+
+Deferring the whole release, as ports_destroy_right does, is not an
+option for no-senders: the release must happen right away, e.g. for
+pflocal to report end-of-file on a pipe when its writer goes away, and
+the deferred references are only dropped once every thread of the
+bucket went through a quiescent state, which an idle thread waiting
+for messages does not do.
+
+So release the port as before, but only free the memory of the
+port_info once all threads went through a quiescent state, and make
+ports_lookup_payload refuse to take a reference on a port being
+destroyed instead of resurrecting it.
+
+* libshouldbeinlibc/refcount.h (refcounts_ref_unless_dying): New
+function.
+* libports/ports.h (ports_lookup_payload): Use it, and fail for a port
+being destroyed.
+* libports/port-deref-deferred.c (struct pi_list): Add free_only.
+(_ports_thread_quiescent): Free the port_info for free_only entries.
+(defer): New function, from _ports_port_deref_deferred.
+(_ports_port_deref_deferred): Use it.
+(_ports_free_deferred): New function.
+* libports/port-deref-deferred.h (_ports_free_deferred): New
+declaration.
+* libports/complete-deallocate.c (_ports_complete_deallocate): Use
+_ports_free_deferred instead of free.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ libports/complete-deallocate.c |  4 +++-
+ libports/port-deref-deferred.c | 27 +++++++++++++++++++++++----
+ libports/port-deref-deferred.h |  3 +++
+ libports/ports.h               |  8 ++++++--
+ libshouldbeinlibc/refcount.h   | 28 ++++++++++++++++++++++++++++
+ 5 files changed, 63 insertions(+), 7 deletions(-)
+
+diff --git a/libports/complete-deallocate.c b/libports/complete-deallocate.c
+index 564842df..c3192648 100644
+--- a/libports/complete-deallocate.c
++++ b/libports/complete-deallocate.c
+@@ -60,5 +60,7 @@ _ports_complete_deallocate (struct port_info *pi)
+   
+   assert_backtrace (pi->current_rpcs == NULL);
+ 
+-  free (pi);
++  /* Other threads may still have dequeued messages carrying PI as
++     protected payload: see ports_lookup_payload.  */
++  _ports_free_deferred (pi);
+ }
+diff --git a/libports/port-deref-deferred.c b/libports/port-deref-deferred.c
+index c33430c1..8234f8fd 100644
+--- a/libports/port-deref-deferred.c
++++ b/libports/port-deref-deferred.c
+@@ -84,6 +84,7 @@ struct pi_list
+ {
+   struct pi_list *next;
+   struct port_info *pi;
++  int free_only;		/* Just free PI, it has no references left.  */
+ };
+ 
+ /* Called by a thread that enters its quiescent period.  */
+@@ -115,7 +116,10 @@ _ports_thread_quiescent (struct ports_threadpool *pool,
+       struct pi_list *old = p;
+       p = p->next;
+ 
+-      ports_port_deref (old->pi);
++      if (old->free_only)
++	free (old->pi);
++      else
++	ports_port_deref (old->pi);
+       free (old);
+     }
+ }
+@@ -140,9 +144,8 @@ _ports_thread_offline (struct ports_threadpool *pool,
+   pthread_spin_unlock (&pool->lock);
+ }
+ 
+-/* Schedule an object for deallocation.  */
+-void
+-_ports_port_deref_deferred (struct port_info *pi)
++static void
++defer (struct port_info *pi, int free_only)
+ {
+   struct ports_threadpool *pool = &pi->bucket->threadpool;
+ 
+@@ -150,6 +153,7 @@ _ports_port_deref_deferred (struct port_info *pi)
+   if (pl == NULL)
+     return;
+   pl->pi = pi;
++  pl->free_only = free_only;
+ 
+   pthread_spin_lock (&pool->lock);
+   pl->next = pool->young_objects;
+@@ -161,3 +165,18 @@ _ports_port_deref_deferred (struct port_info *pi)
+     }
+   pthread_spin_unlock (&pool->lock);
+ }
++
++/* Schedule an object for deallocation.  */
++void
++_ports_port_deref_deferred (struct port_info *pi)
++{
++  defer (pi, 0);
++}
++
++/* Schedule the memory of PI, which has no references left, to be freed
++   once all threads went through a quiescent state.  */
++void
++_ports_free_deferred (struct port_info *pi)
++{
++  defer (pi, 1);
++}
+diff --git a/libports/port-deref-deferred.h b/libports/port-deref-deferred.h
+index 1589cb20..3dc5ee6e 100644
+--- a/libports/port-deref-deferred.h
++++ b/libports/port-deref-deferred.h
+@@ -86,4 +86,7 @@ struct port_info;
+ /* Schedule an object for deallocation.  */
+ void _ports_port_deref_deferred (struct port_info *);
+ 
++/* Schedule the memory of an object without references to be freed.  */
++void _ports_free_deferred (struct port_info *);
++
+ #endif	/* _HURD_PORTS_DEREF_DEFERRED_ */
+diff --git a/libports/ports.h b/libports/ports.h
+index b9466184..aa523701 100644
+--- a/libports/ports.h
++++ b/libports/ports.h
+@@ -283,8 +283,12 @@ ports_lookup_payload (struct port_bucket *bucket,
+   if (pi && class && pi->class != class)
+     pi = NULL;
+ 
+-  if (pi)
+-    refcounts_unsafe_ref (&pi->refcounts, NULL);
++  /* The message may have been dequeued before the port was destroyed.
++     The memory of PI is only freed once all threads went through a
++     quiescent state, but we must not resurrect a port being destroyed,
++     that is, one with only the reference of the hash tables left.  */
++  if (pi && ! refcounts_ref_unless_dying (&pi->refcounts, 1, NULL))
++    pi = NULL;
+ 
+   return pi;
+ }
+diff --git a/libshouldbeinlibc/refcount.h b/libshouldbeinlibc/refcount.h
+index 92e781d7..f56bd570 100644
+--- a/libshouldbeinlibc/refcount.h
++++ b/libshouldbeinlibc/refcount.h
+@@ -358,6 +358,34 @@ refcounts_deref_weak_unless (refcounts_t *ref, uint32_t last,
+   return 1;
+ }
+ 
++/* Increment the hard reference count of REF, unless REF has no hard
++   reference and at most DYING weak references, which the caller uses
++   to tell that the object is being destroyed.  Return non-zero if the
++   count was incremented, and then write the result to RESULT if it is
++   not NULL.  This function uses atomic operations.  It is not required
++   to serialize calls to this function.  */
++REFCOUNT_EI int
++refcounts_ref_unless_dying (refcounts_t *ref, uint32_t dying,
++			    struct references *result)
++{
++  const union _references op = { .references = REFCOUNT_REFERENCES (1, 0) };
++  union _references r, n;
++  r.value = __atomic_load_n (&ref->value, __ATOMIC_RELAXED);
++  do
++    {
++      if (r.references.hard == 0 && r.references.weak <= dying)
++	return 0;
++      assert_backtrace (r.references.hard != UINT32_MAX
++			|| !"refcount overflowed!");
++      n.value = r.value + op.value;
++    }
++  while (! __atomic_compare_exchange_n (&ref->value, &r.value, n.value, 1,
++					__ATOMIC_ACQUIRE, __ATOMIC_RELAXED));
++  if (result)
++    *result = n.references;
++  return 1;
++}
++
+ /* Store the current reference counts of REF in RESULT.  This function
+    uses atomic operations.  It is not required to serialize calls to
+    this function.  */
+-- 
+2.54.0 (Apple Git-157)
+

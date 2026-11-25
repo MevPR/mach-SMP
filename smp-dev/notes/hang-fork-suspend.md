@@ -174,3 +174,36 @@ Earlier series with `smp_pset=default` (without the libports fix):
 14 / 18.  Twelve successes in a row at that rate would happen by chance
 with p ~ 0.05.  Hang types A and B did not show up either; they may have
 been consequences of the same heap corruption, but that is not proven.
+
+## Update 2026-11-25 (3): hang A root-caused (glibc), libports fix revised
+
+### A. /bin/sh fork: the forking thread and the signal thread wait for each other
+
+Symbolized cores of a stuck `(/bin/sh(32))` (a command substitution
+subshell forking a pipeline):
+
+    M: __thread_get_state(_hurd_msgport_thread) <- _Fork (_Fork.c:480) <- forkshell
+    S: __thread_suspend(M) <- post_signal (hurdsig.c:1013, signo 20 = SIGCHLD)
+       <- _S_msg_sig_post
+
+`_Fork` resumes the threads it stopped with proc_dostop (resume_threads,
+"all state has now been copied") *before* it fetches the signal thread's
+state for the child (thread_get_state, and on x86_64 again in
+_hurd_tls_fork).  The signal thread, running again, delivers SIGCHLD:
+post_signal suspends the target first and only then checks the critical
+section.  M is suspended while waiting in thread_get_state(S); S is then
+stopped by thread_get_state's hold; deadlock.  Fix:
+`patches-hurd/0001-hurd-fork-fetch-the-signal-thread-state-before-resum.patch`
+(glibc; move resume_threads after the signal thread setup).  Untested so far
+(needs a glibc rebuild).
+
+### E (revised). libports: a first "defer the no-senders deref" attempt hung
+
+Deferring the whole release on no-senders (as ports_destroy_right does)
+made pflocal never close the write end of a pipe: the deferred reference
+is only dropped once every thread of the bucket passes a quiescent state,
+and an idle thread blocked in receive never does (seen as
+`old_objects = {sock_user}` with `old_threads = 1`, the rc shell waiting
+for EOF forever).  Replaced by: release immediately, defer only `free(pi)`,
+and make ports_lookup_payload refuse to resurrect a dying port
+(`refcounts_ref_unless_dying`).  Patch 0002-libports-....

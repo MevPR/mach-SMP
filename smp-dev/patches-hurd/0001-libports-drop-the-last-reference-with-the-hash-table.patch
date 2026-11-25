@@ -1,8 +1,8 @@
 From afbd9c1ad8bebdb71092657210b53a269da9c7f6 Mon Sep 17 00:00:00 2001
 From: Magnus Reimann <magnus.reimann@mailbox.org>
 Date: Wed, 25 Nov 2026 02:29:01 +0100
-Subject: [PATCH hurd] libports: drop the last reference with the hash table
- lock held
+Subject: [PATCH hurd 1/2] libports: drop the last reference with the hash
+ table lock held
 
 ports_port_deref dropped the last hard reference, and only then
 _ports_complete_deallocate took _ports_htable_lock and checked that
