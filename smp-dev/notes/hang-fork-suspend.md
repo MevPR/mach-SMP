@@ -266,3 +266,30 @@ into the ring, which later really frees it twice -> exactly a chunk
 handed out twice.  dbgmalloc v2 claims a block with a LIVE -> FREED
 compare-and-swap and keeps the last report in `dbgmalloc_last` for
 cores.  Next run should name the concurrent double free, if that is it.
+
+## Update 2026-11-25 (5): ROOT CAUSE of the heap corruption (hang E): glibc catomic without lock prefix
+
+A plain multithreaded test (`hurdboot/mtstress.c`: malloc/free with
+pattern checks) aborts within seconds on 2 vCPUs ("malloc_consolidate():
+unaligned fastbin chunk detected", "corrupted size vs. prev_size in
+fastbins"), never on 1 vCPU.  Also with MALLOC_ARENA_MAX=1 and tcache off.
+The same lock/heap pattern written by hand (gnumach tests test-lll,
+test-heap; `hurdboot/heapsim.c` on the Hurd) never fails, so the kernel
+and gsync are fine.
+
+glibc's malloc pushes freed chunks onto fastbins with
+`catomic_compare_and_exchange_val_rel`, which on x86 is
+
+    cmpl $0, %fs:multiple_threads ; je 0f ; lock ; 0: cmpxchg
+
+On the Hurd only `_hurd_tls_init` (main thread) sets
+`tcbhead_t.multiple_threads`; `_hurd_tls_new`, used for every new
+pthread, does not, and `_dl_allocate_tls` zeroes the TCB.  So in all
+threads but the main one the cmpxchg runs without `lock`: atomic on one
+CPU, racy on several.  mtstress prints `multiple_threads=0` in its
+workers; setting `%fs:0x18 = 1` at the start of each worker makes every
+run pass (12/12 vs 0/6).
+
+Fix: set `tcb->multiple_threads = 1` in `_hurd_tls_new`
+(sysdeps/mach/hurd/{x86_64,i386}/tls.h).  Patch
+`patches-hurd/0001-hurd-set-multiple_threads-in-new-threads-TCB.patch`.
