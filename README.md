@@ -19,7 +19,7 @@ in [`README`](README).
 |---|---|
 | **mach-SMP** (this one) | GNU Mach kernel; the investigation notes, tests and tools for the whole project |
 | [hurd-SMP](https://github.com/MevPR/hurd-SMP) | Hurd libraries (libports, libfshelp, libpager) |
-| [glibc-SMP](https://github.com/MevPR/glibc-SMP) | glibc's Hurd port |
+| [hurd-glibc](https://github.com/MevPR/hurd-glibc) | glibc's Hurd port |
 
 The netdde (libddekit) and rumpkernel fixes are patches against Debian
 packages and live in [`smp-dev/outbox/`](smp-dev/outbox) here.
@@ -60,7 +60,7 @@ packages and live in [`smp-dev/outbox/`](smp-dev/outbox) here.
 ### Hurd userland
 
 - **glibc: heap corruption in every multithreaded program**
-  ([glibc-SMP](https://github.com/MevPR/glibc-SMP)). The thread
+  ([hurd-glibc](https://github.com/MevPR/hurd-glibc)). The thread
   control block of new threads never got `multiple_threads` set, so
   glibc's conditionally atomic operations (used by malloc) ran without the
   `lock` prefix in all threads but the main one.  Harmless on one CPU,
