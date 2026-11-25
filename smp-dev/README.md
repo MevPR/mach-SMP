@@ -25,7 +25,8 @@ See the top-level [README.md](../README.md) for what was found and fixed.
 | `notes/hang-fork-suspend.md` | the investigation log: every hang and crash, how it was caught, root cause, test results |
 | `INVENTORY.md` | initial inventory of the SMP code and the agreed work order |
 | `outbox/` | patch series ready for upstream (gnumach, hurd, netdde, rumpkernel, glibc) and `send.sh` (dry run by default, `--send` to mail them) |
-| `patches-hurd/` | the userland patches as single files, including the libports variant adapted to Debian's hurd 0.9.git20250801 |
+| `patches-hurd/` | the userland patches as single files (glibc, hurd, netdde, rumpkernel), including the libports variant adapted to Debian's hurd 0.9.git20250801 |
+| `testpatch/` | how the userland fixes were applied to the test image: binary patches (`binpatch.py`) and rebuild scripts for the Hurd VM |
 | `stress/` | kernel stress scripts, and userland test programs for a running Hurd: `mtstress.c` (multithreaded malloc torture), `heapsim.c` (lock plus brk-style heap without glibc malloc), `tlsfix.c` (link-time workaround for the glibc `multiple_threads` bug in static binaries) |
 | `dbgmalloc.c` | quarantining malloc for Hurd servers (`-Wl,--wrap=malloc,...`): catches writes after free and double frees, keeps the last report in `dbgmalloc_last` for cores |
 | `hurd/` | booting and driving Debian GNU/Hurd amd64 under QEMU, and the gdb scripts used to analyse a hung system from the kernel (see below) |

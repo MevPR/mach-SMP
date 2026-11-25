@@ -1,5 +1,7 @@
+From d0195e127602cf60cc6f5da4cdc3c5ad0e27a341 Mon Sep 17 00:00:00 2001
 From: Magnus Reimann <magnus.reimann@mailbox.org>
-Subject: [PATCH] hurd: Set multiple_threads in the TCB of new threads
+Date: Wed, 25 Nov 2026 19:45:15 +0100
+Subject: [PATCH 2/2] hurd: Set multiple_threads in the TCB of new threads
 
 On x86, the catomic_* operations only use the lock prefix when
 tcbhead_t.multiple_threads is set in the current thread's TCB.  On the
@@ -16,15 +18,17 @@ ext2fs.
 Set it in _hurd_tls_new.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Magnus Reimann <magnus.reimann@mailbox.org>
 ---
  sysdeps/mach/hurd/i386/tls.h   | 3 +++
  sysdeps/mach/hurd/x86_64/tls.h | 3 +++
  2 files changed, 6 insertions(+)
 
 diff --git a/sysdeps/mach/hurd/i386/tls.h b/sysdeps/mach/hurd/i386/tls.h
+index 403395db..706b6e66 100644
 --- a/sysdeps/mach/hurd/i386/tls.h
 +++ b/sysdeps/mach/hurd/i386/tls.h
-@@ -295,6 +295,9 @@
+@@ -295,6 +295,9 @@ _hurd_tls_new (thread_t child, tcbhead_t *tcb)
    HURD_TLS_DESC_DECL (desc, tcb);
  
    tcb->tcb = tcb;
@@ -35,9 +39,10 @@ diff --git a/sysdeps/mach/hurd/i386/tls.h b/sysdeps/mach/hurd/i386/tls.h
    if (HURD_SEL_LDT (sel))
      err = __i386_set_ldt (child, sel, &desc, 1);
 diff --git a/sysdeps/mach/hurd/x86_64/tls.h b/sysdeps/mach/hurd/x86_64/tls.h
+index 3543e9be..fb10fba3 100644
 --- a/sysdeps/mach/hurd/x86_64/tls.h
 +++ b/sysdeps/mach/hurd/x86_64/tls.h
-@@ -168,6 +168,9 @@
+@@ -168,6 +168,9 @@ _hurd_tls_new (thread_t child, tcbhead_t *tcb)
    struct i386_fsgs_base_state state;
  
    tcb->tcb = tcb;
@@ -47,3 +52,6 @@ diff --git a/sysdeps/mach/hurd/x86_64/tls.h b/sysdeps/mach/hurd/x86_64/tls.h
  
    /* Install the TCB address into FS base.  */
    state.fs_base = (uintptr_t) tcb;
+-- 
+2.54.0 (Apple Git-157)
+

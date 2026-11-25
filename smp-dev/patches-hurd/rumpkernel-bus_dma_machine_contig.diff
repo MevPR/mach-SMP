@@ -1,0 +1,97 @@
+Description: bus_dma: use machine addresses for boundaries and coalescing
+ _bus_dmamap_load_buffer gets the host virtual address of each chunk
+ (vtophys is the identity in rump) and only converts it to a machine
+ address with rumpcomp_pci_virt_to_mach for the segment start.  The
+ boundary check was however done on the virtual address, and chunks were
+ coalesced when they were contiguous in virtual memory and their machine
+ addresses fell in the same boundary-sized block.  Pages that are
+ contiguous in virtual memory are not necessarily so in machine memory,
+ so a segment could cover the wrong machine pages: the device then
+ transfers to or from memory that does not belong to the buffer.  When
+ the bogus segment happens to cross a 64KiB boundary, pciide catches it:
+ .
+   pciide_dma: seg 0 addr 0x7976f200 len 0x1800 not properly aligned
+   panic: pciide_dma: buf align
+ .
+ (seen with rumpdisk on Debian GNU/Hurd amd64); otherwise the transfer
+ silently goes to the wrong pages.
+ .
+ Get the machine address of each chunk once, apply the boundary to it,
+ and only coalesce chunks that are contiguous in machine memory.
+ .
+ A test harness running the old and the new function on 200000 random
+ buffers whose pages are partly contiguous, partly scattered in machine
+ memory: the old code produced a wrong mapping for 14630 of them and a
+ segment crossing 64KiB for 1873, the new code for none.
+Author: Magnus Reimann <magnus.reimann@mailbox.org>
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Last-Update: 2026-11-25
+
+--- rumpkernel.orig/buildrump.sh/src/sys/rump/dev/lib/libpci/rumpdev_bus_dma.c	2026-11-25 20:22:31
++++ rumpkernel/buildrump.sh/src/sys/rump/dev/lib/libpci/rumpdev_bus_dma.c	2026-11-25 20:23:11
+@@ -158,7 +158,7 @@
+ 	bus_addr_t *lastaddrp, int *segp, int first)
+ {
+ 	bus_size_t sgsize;
+-	bus_addr_t curaddr, lastaddr, baddr, bmask;
++	bus_addr_t curaddr, lastaddr, baddr, bmask, maddr;
+ 	vaddr_t vaddr = (vaddr_t)buf;
+ 	int seg;
+ 
+@@ -187,6 +187,14 @@
+ 			return (EINVAL);
+ 
+ 		/*
++		 * CURADDR is a host virtual address: the device needs the
++		 * machine address, and that is also what boundaries and
++		 * contiguity are about, since pages that are contiguous in
++		 * virtual memory need not be in machine memory.
++		 */
++		maddr = rumpcomp_pci_virt_to_mach((void *)curaddr);
++
++		/*
+ 		 * Compute the segment size, and adjust counts.
+ 		 */
+ 		sgsize = PAGE_SIZE - ((u_long)vaddr & PGOFSET);
+@@ -198,9 +206,9 @@
+ 		 * Make sure we don't cross any boundaries.
+ 		 */
+ 		if (map->_dm_boundary > 0) {
+-			baddr = (curaddr + map->_dm_boundary) & bmask;
+-			if (sgsize > (baddr - curaddr))
+-				sgsize = (baddr - curaddr);
++			baddr = (maddr + map->_dm_boundary) & bmask;
++			if (sgsize > (baddr - maddr))
++				sgsize = (baddr - maddr);
+ 		}
+ 
+ 		/*
+@@ -208,23 +216,22 @@
+ 		 * the previous segment if possible.
+ 		 */
+ 		if (first) {
+-			map->dm_segs[seg].ds_addr
+-			    = rumpcomp_pci_virt_to_mach((void *)curaddr);
++			map->dm_segs[seg].ds_addr = maddr;
+ 			map->dm_segs[seg].ds_len = sgsize;
+ 			first = 0;
+ 		} else {
+-			if (curaddr == lastaddr &&
++			if (maddr == map->dm_segs[seg].ds_addr +
++			     map->dm_segs[seg].ds_len &&
+ 			    (map->dm_segs[seg].ds_len + sgsize) <=
+ 			     map->dm_maxsegsz &&
+ 			    (map->_dm_boundary == 0 ||
+ 			     (map->dm_segs[seg].ds_addr & bmask) ==
+-			     (rumpcomp_pci_virt_to_mach((void*)curaddr)&bmask)))
++			     (maddr & bmask)))
+ 				map->dm_segs[seg].ds_len += sgsize;
+ 			else {
+ 				if (++seg >= map->_dm_segcnt)
+ 					break;
+-				map->dm_segs[seg].ds_addr =
+-				    rumpcomp_pci_virt_to_mach((void *)curaddr);
++				map->dm_segs[seg].ds_addr = maddr;
+ 				map->dm_segs[seg].ds_len = sgsize;
+ 			}
+ 		}
