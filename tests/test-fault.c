@@ -1,0 +1,164 @@
+/*
+ *  Copyright (C) 2026 Free Software Foundation
+ *
+ * This program is free software ; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation ; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY ; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with the program ; if not, write to the Free Software
+ * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ */
+
+/*
+ * Threads on all processors write at the same time into pages that
+ * nobody has touched yet, each thread to its own words of every page, so
+ * that they take zero-fill faults on the same pages concurrently.  Then
+ * check that every write is there: a fault that installs a second
+ * physical page over one already written to loses the first writes.
+ */
+
+#include <mach/thread_info.h>
+
+#include <syscalls.h>
+#include <testlib.h>
+
+#include <mach.user.h>
+#include <mach_host.user.h>
+
+#define NWORKERS	4
+#define PAGES		64
+#define ROUNDS		200
+#define MAXCPUS		64
+
+static volatile unsigned long cpus_seen;
+static volatile int round_no, arrived, done;
+static volatile vm_address_t region;
+static int ncpus;
+
+/* See test-smp.c.  */
+static void assign_all_processors_to_default_pset(void)
+{
+  processor_array_t procs;
+  mach_msg_type_number_t nprocs;
+  processor_set_name_t default_name, cur;
+  processor_set_t default_pset;
+  int err;
+
+  err = host_processors(host_priv(), &procs, &nprocs);
+  ASSERT_RET(err, "host_processors");
+  ncpus = nprocs;
+  printf("%d processors\n", nprocs);
+
+  err = processor_set_default(mach_host_self(), &default_name);
+  ASSERT_RET(err, "processor_set_default");
+  err = host_processor_set_priv(host_priv(), default_name, &default_pset);
+  ASSERT_RET(err, "host_processor_set_priv");
+
+  for (int i = 0; i < nprocs; i++)
+    {
+      err = processor_get_assignment(procs[i], &cur);
+      ASSERT_RET(err, "processor_get_assignment");
+      if (cur == default_name)
+        continue;
+      err = processor_assign(procs[i], default_pset, TRUE);
+      ASSERT_RET(err, "processor_assign");
+    }
+}
+
+static void note_cpu(void)
+{
+  struct thread_sched_info info;
+  mach_msg_type_number_t count = THREAD_SCHED_INFO_COUNT;
+  int err;
+
+  err = thread_info(mach_thread_self(), THREAD_SCHED_INFO,
+                    (thread_info_t) &info, &count);
+  ASSERT_RET(err, "thread_info");
+  if (info.last_processor >= 0 && info.last_processor < MAXCPUS)
+    __atomic_or_fetch(&cpus_seen, 1UL << info.last_processor,
+                      __ATOMIC_RELAXED);
+}
+
+/* Spin a little, so that the workers start writing together, then
+   sleep so as not to starve the threads we wait for.  */
+#define WAIT_UNTIL(cond)                        \
+  for (long _n = 0; ! (cond); _n++)             \
+    if (_n > 20000)                             \
+      msleep(1)
+
+static void worker(void *arg)
+{
+  long id = (long) arg;
+
+  for (int r = 1; r <= ROUNDS; r++)
+    {
+      /* Wait for the region of round R.  */
+      WAIT_UNTIL(__atomic_load_n(&round_no, __ATOMIC_ACQUIRE) >= r);
+      volatile long *p = (volatile long *) region;
+      for (int pg = 0; pg < PAGES; pg++)
+        p[pg * vm_page_size / sizeof (long) + id] = (long) r << 8 | id;
+      if (r % 50 == 0)
+        note_cpu();
+      __atomic_add_fetch(&arrived, 1, __ATOMIC_RELEASE);
+    }
+  __atomic_add_fetch(&done, 1, __ATOMIC_RELEASE);
+  thread_terminate(mach_thread_self());
+  FAILURE("thread_terminate");
+}
+
+int main(int argc, char *argv[], int envc, char *envp[])
+{
+  long lost = 0;
+  int nseen = 0;
+  int err;
+
+  assign_all_processors_to_default_pset();
+
+  for (long i = 0; i < NWORKERS; i++)
+    test_thread_start(mach_task_self(), worker, (void *) i);
+
+  for (int r = 1; r <= ROUNDS; r++)
+    {
+      vm_address_t addr = 0;
+
+      err = vm_allocate(mach_task_self(), &addr, PAGES * vm_page_size, TRUE);
+      ASSERT_RET(err, "vm_allocate");
+      region = addr;
+      __atomic_store_n(&arrived, 0, __ATOMIC_RELAXED);
+      __atomic_store_n(&round_no, r, __ATOMIC_RELEASE);
+      WAIT_UNTIL(__atomic_load_n(&arrived, __ATOMIC_ACQUIRE) >= NWORKERS);
+
+      volatile long *p = (volatile long *) addr;
+      for (int pg = 0; pg < PAGES; pg++)
+        for (long id = 0; id < NWORKERS; id++)
+          {
+            long v = p[pg * vm_page_size / sizeof (long) + id];
+            if (v != ((long) r << 8 | id))
+              {
+                if (lost++ < 5)
+                  printf("round %d page %d word %ld: %lx\n", r, pg, id, v);
+              }
+          }
+      err = vm_deallocate(mach_task_self(), addr, PAGES * vm_page_size);
+      ASSERT_RET(err, "vm_deallocate");
+    }
+
+  while (__atomic_load_n(&done, __ATOMIC_ACQUIRE) < NWORKERS)
+    msleep(10);
+
+  for (int i = 0; i < MAXCPUS; i++)
+    if (cpus_seen & (1UL << i))
+      nseen++;
+  printf("%d rounds of %d pages, %ld lost writes, workers ran on %d of %d processors (mask %lx)\n",
+         ROUNDS, PAGES, lost, nseen, ncpus, cpus_seen);
+  ASSERT(lost == 0, "writes to freshly faulted pages were lost");
+
+  return 0;
+}
