@@ -310,3 +310,20 @@ Tools: `smp-dev/stress/mtstress.c` (malloc torture, modes),
 `smp-dev/stress/heapsim.c` (lll lock + brk-style heap without glibc
 malloc), gnumach tests test-tlb, test-fault, test-brk, test-lll,
 test-heap (branch tlb-shootdown-test).
+
+### Full stress test with every fix (2026-11-25)
+
+Fixed libpthread.so (binary patch above), ext2fs.static relinked with
+tlsfix.c + dbgmalloc v2, plus the libfshelp rlock, libpager, libports,
+libddekit and glibc fork fixes; integration kernel, `smp_pset=default`,
+2 vCPUs; `cmds-stress.txt` (4 parallel gcc, sort, tar/find, fork loops):
+
+    6 / 6 runs complete (runs 18-23), no dbgmalloc report, no crash,
+    no "looked up a bogus port"
+
+Before the multiple_threads fix: runs 8-12 gave 2 complete, 3 hung on
+ext2fs heap corruption.
+
+Left: once (run 18, during boot, after `/usr/bin/console` timed out),
+gnumach printed "task ext2fs deallocating a bogus port 946" - not
+analysed yet.
