@@ -412,3 +412,28 @@ New open items seen on the way:
   size" (not reproduced in the 6 following boots).
 - One boot: both `bash /bin/loginpr` instances (getty on the now living
   virtual consoles) died with SIGSEGV at 0x75680, same PCs.
+
+## Update 2026-11-26 (4): netdde "looked up a bogus port ... for 2902"
+
+2902 is the device_write reply (device 2800 + 100 + 2).  libmachdevdde's
+device_write hands the packet to linux_pkg_xmit with an skb_reply holding
+the reply port and returns MIG_NO_REPLY; pre_kfree_skb replies when the
+sk_buff is freed.  But dev_queue_xmit, when it cannot send (e.g. -ENETDOWN
+while the interface is not up yet), frees the sk_buff (first reply) and
+returns the error, and device_write returned it, so MIG replied a second
+time on the used send-once right: gnumach logs the bogus lookup and the
+bogus deallocation, for every packet dhclient sends while the link is
+down.  Fix: outbox/hurd-dde/0001 (check the length first; only a failed
+sk_buff allocation is a real error; otherwise always MIG_NO_REPLY).
+Built into libmachdevdde.so in the dev VM together with the source
+version of the libddekit timer fix.
+
+Two more findings while preparing the Chromium image:
+- With 4 GB of guest RAM, ext2fs cannot read the root partition at all
+  ("ext2fs: part:1:device:wd0: Input/output error"); with 3 GB it can.
+  RAM above 4 GB and 32-bit IDE bus-master DMA without bounce buffers in
+  rump's bus_dma (EINVAL beyond _dm_bounce_thresh) is the likely cause.
+- `testpatch/tlspatch.py`: generic binary patch for the multiple_threads
+  bug (finds `mov %rax,(%rax)` after `call _dl_allocate_tls`), for glibc
+  2.43 where htl lives in libc.so.  Needs symbols, so not for stripped
+  static servers (those are relinked with tlsfix.c).

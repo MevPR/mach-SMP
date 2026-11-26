@@ -27,6 +27,9 @@ git send-email $COMMON --to=bug-hurd@gnu.org --cc=$SAMUEL hurd/*.patch
 # netdde: libddekit timer thread sleeping forever (1 patch)
 git send-email $COMMON --to=bug-hurd@gnu.org --cc=$SAMUEL netdde/*.patch
 
+# Hurd DDE glue (libmachdevdde, in the Debian hurd source): double device_write reply (1 patch)
+git send-email $COMMON --to=bug-hurd@gnu.org --cc=$SAMUEL hurd-dde/0001-*.patch
+
 # rumpkernel (Debian package): bus_dma machine contiguity (1 patch)
 git send-email $COMMON --to=bug-hurd@gnu.org --cc=$SAMUEL rumpkernel/0001-*.patch
 

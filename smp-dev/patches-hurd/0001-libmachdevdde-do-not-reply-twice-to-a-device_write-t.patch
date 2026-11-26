@@ -1,0 +1,104 @@
+From 250ace27c04b22df9fe1d887c04522ee688c513e Mon Sep 17 00:00:00 2001
+From: Magnus Reimann <magnus.reimann@mailbox.org>
+Date: Thu, 26 Nov 2026 10:43:24 +0100
+Subject: [PATCH hurd dde] libmachdevdde: do not reply twice to a device_write that
+ failed
+
+device_write hands the packet to linux_pkg_xmit along with an skb_reply
+holding the reply port, and returns MIG_NO_REPLY: pre_kfree_skb sends
+the reply when the network stack frees the sk_buff.  When the packet
+could not be sent, however, dev_queue_xmit frees the sk_buff (calling
+pre_kfree_skb, which replies) and returns an error, e.g. -ENETDOWN while
+the interface is not up yet, and device_write then returned that error,
+so that MIG sent a second reply on the same, already used, send-once
+right.  gnumach logs it as
+
+  task /hurd/netdde(517) looked up a bogus port 58 for 2902, most probably a bug.
+  task /hurd/netdde(517) deallocating a bogus port 58, most probably a bug.
+
+for every packet dhclient sends while the link is down; once the name
+is reused, the reply and the deallocation hit an unrelated right.
+
+Check the length before calling linux_pkg_xmit, free skb_reply and fail
+only when no sk_buff could be allocated, and otherwise always return
+MIG_NO_REPLY.
+
+* libmachdevdde/net.c (LINUX_ENOMEM): New macro.
+(device_write): Check the packet length first.  Return MIG_NO_REPLY
+whenever linux_pkg_xmit took the packet.  Free skb_reply when it did
+not.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ libmachdevdde/net.c | 39 ++++++++++++++++++++++++++++++++++-----
+ 1 file changed, 34 insertions(+), 5 deletions(-)
+
+diff --git a/libmachdevdde/net.c b/libmachdevdde/net.c
+index 25c08cd..692f106 100644
+--- a/libmachdevdde/net.c
++++ b/libmachdevdde/net.c
+@@ -80,6 +80,11 @@
+ 
+ #define ether_header ethhdr
+ 
++/* ENOMEM as linux_pkg_xmit returns it when it cannot allocate an
++   sk_buff: a positive Linux errno, unlike what dev_queue_xmit returns
++   (negative errnos and small NET_XMIT_* codes).  */
++#define LINUX_ENOMEM 12
++
+ /* One of these is associated with each instance of a device.  */
+ struct net_data
+ {
+@@ -373,11 +378,23 @@ device_write (void *d, mach_port_t reply_port,
+ {
+   struct net_data *nd = d;
+   struct net_device *dev = nd->dev;
+-  struct skb_reply *skb_reply = malloc (sizeof (*skb_reply));
+-  error_t err;
++  struct skb_reply *skb_reply;
++  int err;
+ 
++  /* linux_pkg_xmit refuses such a packet without taking it; check here,
++     so that below an error means that the packet was taken.  */
++  if (count == 0 || count > netdev_mtu (dev) + netdev_header_len (dev))
++    {
++      vm_deallocate (mach_task_self (), (vm_address_t) data, count);
++      return D_INVALID_SIZE;
++    }
++
++  skb_reply = malloc (sizeof (*skb_reply));
+   if (skb_reply == NULL)
+-    return D_NO_MEMORY;
++    {
++      vm_deallocate (mach_task_self (), (vm_address_t) data, count);
++      return D_NO_MEMORY;
++    }
+ 
+   skb_reply->pkglen = count;
+   skb_reply->reply = reply_port;
+@@ -385,8 +402,20 @@ device_write (void *d, mach_port_t reply_port,
+ 
+   err = linux_pkg_xmit (data, count, skb_reply, pre_kfree_skb, dev);
+   vm_deallocate (mach_task_self (), (vm_address_t) data, count);
+-  if (err)
+-    return linux_to_mach_error (err);
++  if (err == LINUX_ENOMEM)
++    {
++      /* No sk_buff could be allocated: the packet was not taken, and we
++	 still own SKB_REPLY.  */
++      free (skb_reply);
++      return D_NO_MEMORY;
++    }
++
++  /* Otherwise the sk_buff carrying SKB_REPLY was handed to the network
++     stack, which frees it, calling pre_kfree_skb, which sends the reply,
++     even when the packet could not be sent: dev_queue_xmit frees it and
++     returns e.g. -ENETDOWN while the interface is down.  We must thus
++     not let MIG send a second reply on the same send-once right, even
++     on error.  */
+ 
+   /* Send packet to filters.  */
+   // TODO should I deliver the packet to other network stacks?
+-- 
+2.54.0 (Apple Git-157)
+
