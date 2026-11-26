@@ -120,6 +120,28 @@ timeout_data_t	timeout_timers[NTIMERS] = {0};
 uint32_t	last_hpc_read = 0;
 
 /*
+ *	The tick-based time and uptime and LAST_HPC_READ, the high precision
+ *	counter value they correspond to, are updated together.  Readers on
+ *	other processors must not combine a new tick time with the old
+ *	counter value (that is up to a tick ahead, and the clock then goes
+ *	backwards on the next read), so the update is bracketed by
+ *	TIME_SEQ, which is odd while it is in progress.
+ */
+static volatile unsigned int time_seq = 0;
+
+#define time_update_begin()						\
+MACRO_BEGIN								\
+	time_seq++;							\
+	__sync_synchronize();						\
+MACRO_END
+
+#define time_update_end()						\
+MACRO_BEGIN								\
+	__sync_synchronize();						\
+	time_seq++;							\
+MACRO_END
+
+/*
  *	This update protocol, with a check value, allows
  *		do {
  *			secs = mtime->seconds;
@@ -160,28 +182,34 @@ MACRO_END
 #define read_mapped_time(time)						\
 MACRO_BEGIN								\
 	uint32_t _last_hpc;						\
+	unsigned int _seq;						\
 	do {								\
+		_seq = time_seq;					\
+		__sync_synchronize();					\
 		_last_hpc = last_hpc_read;				\
 		(time)->seconds = mtime->time_value.seconds;		\
 		__sync_synchronize();					\
 		(time)->nanoseconds = mtime->time_value.nanoseconds;	\
 		__sync_synchronize();					\
-	} while (((time)->seconds != mtime->check_seconds64)		\
-	      || (_last_hpc != last_hpc_read));				\
+	} while ((_seq & 1) || (_seq != time_seq)			\
+	      || ((time)->seconds != mtime->check_seconds64));		\
 	time_value64_add_hpc(time, _last_hpc);				\
 MACRO_END
 
 #define read_mapped_uptime(uptime)					\
 MACRO_BEGIN								\
 	uint32_t _last_hpc;						\
+	unsigned int _seq;						\
 	do {								\
+		_seq = time_seq;					\
+		__sync_synchronize();					\
 		_last_hpc = last_hpc_read;				\
 		(uptime)->seconds = mtime->uptime_value.seconds;	\
 		__sync_synchronize();					\
 		(uptime)->nanoseconds = mtime->uptime_value.nanoseconds;\
 		__sync_synchronize();					\
-	} while (((uptime)->seconds != mtime->check_upseconds64)	\
-	      || (_last_hpc != last_hpc_read));				\
+	} while ((_seq & 1) || (_seq != time_seq)			\
+	      || ((uptime)->seconds != mtime->check_upseconds64));	\
 	time_value64_add_hpc(uptime, _last_hpc);			\
 MACRO_END
 
@@ -287,8 +315,12 @@ void clock_interrupt(
 	    simple_unlock_irq(s, &twheel_lock);
 
 	    /*
-	     *	Increment the time-of-day clock.
+	     *	Increment the time-of-day clock, and take the high
+	     *	precision counter value it corresponds to.
 	     */
+	    {
+	    spl_t	ts = splhigh();
+	    time_update_begin();
 	    if (timedelta == 0) {
 		time_value64_add_nanos(&time, usec * 1000);
 		time_value64_add_nanos(&uptime, usec * 1000);
@@ -317,6 +349,10 @@ void clock_interrupt(
 	    }
 	    update_mapped_time(&time);
 	    update_mapped_uptime(&uptime);
+	    last_hpc_read = hpclock_read_counter();
+	    time_update_end();
+	    splx(ts);
+	    }
 
 	    /*
 	     *	Schedule soft-interrupt for timeout if needed
@@ -335,10 +371,6 @@ void clock_interrupt(
 		++softticks;
 	    }
 
-	    /*
-	     *	Only update high precision read on cpu0 once per clock interrupt
-	     */
-	    last_hpc_read = hpclock_read_counter();
 	}
 }
 
@@ -621,8 +653,10 @@ host_set_time64(const host_t host, time_value64_t new_time)
 
 	s = splhigh();
 	clock_boottime_update(&new_time);
+	time_update_begin();
 	time = new_time;
 	update_mapped_time(&time);
+	time_update_end();
 	resettodr();
 	splx(s);
 
