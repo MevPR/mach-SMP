@@ -1,7 +1,7 @@
 From 55d2da7ed2672b2cacb3e4d74426b1b4c7515ae7 Mon Sep 17 00:00:00 2001
 From: Magnus Reimann <magnus.reimann@mailbox.org>
 Date: Wed, 25 Nov 2026 23:22:39 +0100
-Subject: [PATCH hurd 5/5] pflocal: unbind a socket with its address locked
+Subject: [PATCH hurd 5/6] pflocal: unbind a socket with its address locked
 
 When the last user port of a bound socket and the port of its address
 go away at the same time, as happens when processes die at shutdown,

@@ -13,7 +13,8 @@ without rebuilding glibc, netdde or rumpkernel, they were applied like this:
 | libports, libfshelp, libpager | hurd 0.9.git20250801 sources patched and rebuilt in the Hurd VM: `rebuild-fixes.sh` (libports in its adapted form, `../patches-hurd/libports-final-deref-for-0.9.git20250801.diff`) |
 | pflocal unbind race | `rebuild-pflocal.sh`: patch applied to the Debian source, pflocal rebuilt and installed |
 | debugging | `rebuild-dbg.sh`: ext2fs.static with `../dbgmalloc.c` |
-| rumpkernel bus_dma | not deployed (needs a rumpkernel package rebuild); tested with `../outbox/rumpkernel/busdma_test.c` |
+| rumpkernel bus_dma | `rebuild-rumpdisk-dma.sh` (rumpdev_bus_dma.c rebuilt alone with gcc 14 and the package flags, verified against Debian's object, swapped into a copy of librumpdev_pci_pic.a) and `relink-rumpdisk.sh`; also `../outbox/rumpkernel/busdma_test.c` |
+| console-client SIGPIPE | `rebuild-console.sh` (note `libdir=/usr/lib/x86_64-gnu`, or the drivers are not found) |
 
 The scripts run inside the dev VM (`/root/hurd-0.9.git20250801`, configured
 with `--enable-static-progs=ext2fs`); the binary patches run anywhere and

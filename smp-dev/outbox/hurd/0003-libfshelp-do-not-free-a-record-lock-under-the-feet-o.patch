@@ -1,7 +1,7 @@
 From 441b7d406368b9ebcc2de5714b8c019a01153efe Mon Sep 17 00:00:00 2001
 From: Magnus Reimann <magnus.reimann@mailbox.org>
 Date: Wed, 25 Nov 2026 12:20:33 +0100
-Subject: [PATCH hurd 3/5] libfshelp: do not free a record lock under the feet
+Subject: [PATCH hurd 3/6] libfshelp: do not free a record lock under the feet
  of its waiters
 
 rele_lock and fshelp_rlock_drop_peropen destroyed and freed a lock

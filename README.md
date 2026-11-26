@@ -18,7 +18,7 @@ in [`README`](README).
 | Repository | Component |
 |---|---|
 | **mach-SMP** (this one) | GNU Mach kernel; the investigation notes, tests and tools for the whole project |
-| [hurd-SMP](https://github.com/MevPR/hurd-SMP) | Hurd libraries and servers (libports, libfshelp, libpager, pflocal) |
+| [hurd-SMP](https://github.com/MevPR/hurd-SMP) | Hurd libraries and servers (libports, libfshelp, libpager, pflocal, console-client) |
 | [hurd-glibc](https://github.com/MevPR/hurd-glibc) | glibc's Hurd port |
 
 The netdde (libddekit) and rumpkernel fixes are patches against Debian
@@ -32,7 +32,7 @@ packages and live in [`smp-dev/outbox/`](smp-dev/outbox) here.
 | **Debian GNU/Hurd amd64, 2 CPUs** | boots, and passes a parallel build/sort/tar/find/fork stress test 6 times out of 6 (before the fixes: 3 of 5 runs hung) |
 | **gnumach tests** | 18 of 18 pass, on an SMP kernel (2 CPUs) and on a uniprocessor kernel; i386 builds without new warnings |
 | **Upstream** | all fixes prepared as patch series in [`smp-dev/outbox/`](smp-dev/outbox), **not yet sent** to bug-hurd@gnu.org and libc-alpha@sourceware.org |
-| **Open** | one occurrence of "task ext2fs deallocating a bogus port" at boot, not yet explained; the rumpkernel fix is only tested in isolation; the glibc fixes were tested as binary patches, not as a glibc rebuild |
+| **Open** | one occurrence of "task ext2fs deallocating a bogus port" at boot, not yet explained; the rumpkernel fix is tested through a rebuilt object linked into rumpdisk, not a package rebuild; the glibc fixes were tested as binary patches, not as a glibc rebuild |
 
 ## What was fixed and improved
 
@@ -81,6 +81,10 @@ packages and live in [`smp-dev/outbox/`](smp-dev/outbox) here.
   was being terminated.
 - **libddekit (netdde):** the driver timer thread could wait forever when
   the next timer was due within 1 ms; the network never came up.
+- **console-client:** when the Hurd console started more slowly than the
+  20 s its parent waits (always the case under QEMU without KVM, where the
+  vga driver parses a 5.7 MB font), it died of SIGPIPE when reporting
+  success, and the system ran without a Hurd console.
 - **rumpkernel:** DMA segments were built from virtual instead of physical
   addresses, so disk transfers could go to the wrong memory pages (and
   rumpdisk panicked with `pciide_dma: buf align`).

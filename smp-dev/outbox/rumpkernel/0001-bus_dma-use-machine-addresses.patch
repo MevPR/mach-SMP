@@ -15,8 +15,13 @@ description below.
 A self-contained test harness (old and new function against a mock
 virt_to_mach) is at
 https://github.com/MevPR/mach-SMP/blob/main/smp-dev/outbox/rumpkernel/busdma_test.c
-I could not rebuild the rumpkernel package itself to test it on a
-running system.
+I did not rebuild the whole rumpkernel package.  To run it, I rebuilt
+rumpdev_bus_dma.c alone with gcc 14 and the package's flags (the
+unpatched file gives the same code and struct offsets as Debian's
+rumpdev_bus_dma.pico), put the patched object into a copy of
+librumpdev_pci_pic.a and relinked rumpdisk.static: 11 boots with it so
+far, no "buf align" panic and no data corruption (md5sums of 2900
+package files checked).
 
 This work was done together with Claude (an AI model by Anthropic).
 

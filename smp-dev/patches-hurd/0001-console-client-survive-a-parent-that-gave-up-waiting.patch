@@ -1,0 +1,86 @@
+From 0b913354b3598f9405cc5cfdef66f192b4cf9066 Mon Sep 17 00:00:00 2001
+From: Magnus Reimann <magnus.reimann@mailbox.org>
+Date: Thu, 26 Nov 2026 07:38:42 +0100
+Subject: [PATCH] console-client: survive a parent that gave up waiting
+
+With --daemonize, the parent waits daemon_wait seconds for the daemon
+to report how its initialization went, and exits with an error if it
+does not hear back in time.  The daemon however goes on initializing,
+and when it is done, daemon_retval_send writes to the pipe whose reader
+is gone: SIGPIPE, whose handler daemon_reset_sigs reset to the default,
+kills the console client.  The system is then left without a Hurd
+console.
+
+This happens on every boot of Debian GNU/Hurd under QEMU without KVM:
+the vga driver parses the 5.7 MB unifont.bdf, which takes more than the
+20 seconds the parent waits.  The client was alive 22 seconds after it
+was started, and gone at 33 seconds.
+
+Ignore SIGPIPE while reporting to the parent, so that a late report
+just fails, and log it.
+
+* console-client/console.c (send_retval): New function.
+(daemon_error, main): Use it instead of daemon_retval_send.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ console-client/console.c | 22 ++++++++++++++++++++--
+ 1 file changed, 20 insertions(+), 2 deletions(-)
+
+diff --git a/console-client/console.c b/console-client/console.c
+index 0b85d127..9ae58453 100644
+--- a/console-client/console.c
++++ b/console-client/console.c
+@@ -26,6 +26,7 @@
+ #include <assert-backtrace.h>
+ 
+ #include <pthread.h>
++#include <signal.h>
+ #if HAVE_DAEMON
+ #include <libdaemon/daemon.h>
+ #endif
+@@ -646,6 +647,23 @@ static const struct argp_child startup_children[] =
+ static struct argp startup_argp = {options, parse_opt, 0,
+ 				   0, startup_children};
+ #if HAVE_DAEMON
++/* Tell the parent how the initialization went.  The parent only waits
++   for daemon_wait seconds; if we took longer, it is gone, and writing to
++   the pipe would raise SIGPIPE and kill us although we are up and
++   running.  */
++static void
++send_retval (int value)
++{
++  struct sigaction ignore = { .sa_handler = SIG_IGN }, old;
++
++  sigemptyset (&ignore.sa_mask);
++  sigaction (SIGPIPE, &ignore, &old);
++  if (daemon_retval_send (value) < 0)
++    daemon_log (LOG_WARNING, "Could not report to the parent process, "
++		"which probably gave up waiting");
++  sigaction (SIGPIPE, &old, NULL);
++}
++
+ #define daemon_error(status, errnum, format, args...)			\
+   do									\
+     {									\
+@@ -659,7 +677,7 @@ static struct argp startup_argp = {options, parse_opt, 0,
+ 	  if (status)							\
+ 	    {								\
+ 	      /* Signal parent.	 */					\
+-	      daemon_retval_send (status);				\
++	      send_retval (status);					\
+ 	      daemon_pid_file_remove ();				\
+ 	      return 0;							\
+ 	    }								\
+@@ -769,7 +787,7 @@ main (int argc, char *argv[])
+ #if HAVE_DAEMON
+   if (daemonize)
+     /* Signal parent that all went well.  */
+-    daemon_retval_send (0);
++    send_retval (0);
+ #endif
+ 
+   cons_server_loop ();
+-- 
+2.54.0 (Apple Git-157)
+

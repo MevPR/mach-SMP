@@ -379,3 +379,36 @@ no pflocal abort, nothing else reported.
 "task ext2fs deallocating a bogus port" did not show up again in 8 runs
 with the tracing kernel since the static servers carry the glibc fix;
 it was most likely another effect of the heap corruption.
+
+## Update 2026-11-26 (3): "console: Could not receive return value" at boot
+
+Every boot of the Debian image, with 1 CPU and with 2, prints
+`Timeout reached while wating for return value` / `/usr/bin/console:
+Could not receive return value from daemon process`.  The parent of the
+daemonized console client waits 20 s (hard-coded in 0.9.git20250801;
+upstream made it `--daemon-wait` in 03abb734).  The vga driver parses
+`/usr/share/hurd/vga-system.bdf` -> `/usr/src/unifont.bdf` (5.7 MB,
+34740 glyphs), which takes longer than that under QEMU/TCG; vcs, kbd and
+mouse alone start in 0-1 s.  Worse: when the daemon finishes, its
+`daemon_retval_send` writes to the pipe of the parent that already
+exited, SIGPIPE (reset to default by `daemon_reset_sigs`) kills it, and
+the system has no Hurd console: client alive at 22 s, gone at 33 s, gone
+after every boot.  Fix (hurd-SMP `console-late-daemon`, outbox/hurd/0006):
+report with SIGPIPE ignored.  6 / 6 boots with the client running after
+boot and 2 minutes later.  "unexpected ACK from keyboard" is gnumach's kd
+driver seeing QEMU's extra PS/2 ACK, harmless.
+
+rumpkernel bus_dma fix deployed (rebuilt object in rumpdisk.static); 11
+boots without the "buf align" panic since, which had shown up again once
+just before (seg 0x7976f200 len 0x1800, the same segment as every time).
+
+New open items seen on the way:
+- netdde, on two consecutive boots of the UP Debian kernel (not on SMP
+  boots): endless `task /hurd/netdde(517) looked up a bogus port 58 for
+  2902` / `deallocating a bogus port 58` (2902: device_write reply), once
+  with the network unusable.  Not analysed yet; log kept in
+  hurdboot/devvm-serial-netdde-loop.log.
+- One boot hung in runlevel S right after "cd0: mbr partition exceeds disk
+  size" (not reproduced in the 6 following boots).
+- One boot: both `bash /bin/loginpr` instances (getty on the now living
+  virtual consoles) died with SIGSEGV at 0x75680, same PCs.

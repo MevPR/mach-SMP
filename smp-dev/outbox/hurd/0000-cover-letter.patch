@@ -1,11 +1,11 @@
-From 55d2da7ed2672b2cacb3e4d74426b1b4c7515ae7 Mon Sep 17 00:00:00 2001
+From 6fbaa320e0944ade0cc9bb2a44a53d1bfddf1f62 Mon Sep 17 00:00:00 2001
 From: Magnus Reimann <magnus.reimann@mailbox.org>
-Date: Thu, 26 Nov 2026 00:57:20 +0100
-Subject: [PATCH hurd 0/5] Races in libports, libfshelp, libpager and pflocal seen on SMP
+Date: Thu, 26 Nov 2026 09:22:05 +0100
+Subject: [PATCH hurd 0/6] Races in libports, libfshelp, libpager, pflocal and console-client
 
 Hello,
 
-These are races in the Hurd libraries that showed up when running
+These are races in the Hurd libraries and servers that showed up when running
 Debian GNU/Hurd amd64 with gnumach's processors all in the default
 processor set (see the gnumach series sent to bug-hurd), under a
 parallel build/sort/tar/fork stress test on 2 vCPUs:
@@ -27,6 +27,14 @@ parallel build/sort/tar/fork stress test on 2 vCPUs:
      aborted on assert_backtrace (!err) in sock_deref, taking down every
      Unix socket of the system.  Seen in 3 of 4 boots on 2 vCPUs; none
      in 6 boots with the fix.
+6.   console-client: with --daemonize, the parent waits a fixed time for
+     the daemon's report and exits when it does not come; the daemon,
+     done later, then gets SIGPIPE when reporting and dies.  Under QEMU
+     without KVM the vga driver needs more than 20 s to parse the 5.7 MB
+     unifont.bdf, so every boot of Debian GNU/Hurd ended without a Hurd
+     console (also on one CPU).  --daemon-wait (03abb734) moves the limit;
+     this makes a late daemon survive it.  Client running after 6 of 6
+     boots with the fix, after none before.
 
 Testing: the deployed Debian hurd 0.9.git20250801 was rebuilt in a
 Hurd VM with these changes (for libports adapted to that version, where
@@ -34,19 +42,21 @@ the hash table holds no reference: the final transition is (0, 0)),
 and ext2fs.static was relinked with them.  With them, the glibc fix
 sent to libc-alpha and the netdde/libddekit timer fix, the stress test
 passes 6 times out of 6; before, the root ext2fs corrupted its heap or
-hung in most runs.  Patches 3 to 5 were compiled in that tree as they
+hung in most runs.  Patches 3 to 6 were compiled in that tree as they
 are here; 1 and 2 only in the adapted form.
 
 This work was done together with Claude (an AI model by Anthropic),
 hence the Co-Authored-By trailers.
 
-Magnus Reimann (5):
+Magnus Reimann (6):
   libports: drop the last reference with the hash table lock held
   libports: do not free port_info under the feet of payload lookups
   libfshelp: do not free a record lock under the feet of its waiters
   libpager: do not use the control port while the object may terminate
   pflocal: unbind a socket with its address locked
+  console-client: survive a parent that gave up waiting
 
+ console-client/console.c       | 22 ++++++++-
  libfshelp/rlock-drop-peropen.c | 17 ++++---
  libfshelp/rlock-tweak.c        | 51 ++++++++++++---------
  libfshelp/rlock.h              |  4 ++
@@ -61,7 +71,7 @@ Magnus Reimann (5):
  libshouldbeinlibc/refcount.h   | 83 ++++++++++++++++++++++++++++++++++
  pflocal/sock.c                 | 76 ++++++++++++++++++++-----------
  pflocal/sock.h                 | 14 ++++--
- 14 files changed, 261 insertions(+), 89 deletions(-)
+ 15 files changed, 281 insertions(+), 91 deletions(-)
 
 -- 
 2.54.0 (Apple Git-157)
