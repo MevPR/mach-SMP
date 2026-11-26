@@ -59,13 +59,14 @@ packages and live in [`smp-dev/outbox/`](smp-dev/outbox) here.
 
 ### Hurd userland
 
-- **glibc: heap corruption in every multithreaded program**
-  ([hurd-glibc](https://github.com/MevPR/hurd-glibc)). The thread
-  control block of new threads never got `multiple_threads` set, so
-  glibc's conditionally atomic operations (used by malloc) ran without the
-  `lock` prefix in all threads but the main one.  Harmless on one CPU,
-  heap corruption on several; this was the cause of the crashes and hangs
-  of the root file system server.
+- **glibc ≤ 2.42: heap corruption in every multithreaded program**
+  ([hurd-glibc](https://github.com/MevPR/hurd-glibc)).  The thread control
+  block of new threads never got `multiple_threads` set, so glibc's
+  conditionally atomic operations (used by malloc) ran without the `lock`
+  prefix in all threads but the main one: heap corruption on SMP, e.g. in
+  the root file system server.  glibc 2.43 removed these x86 `catomic_*`
+  primitives (4eef002328, September 2025), which fixes it too; the patch is
+  therefore only needed for older glibc and is no longer in the outbox.
 - **glibc: fork deadlock.** `fork` resumed the signal thread before reading
   its state; the two threads could suspend each other (`/bin/sh` hung at
   boot).

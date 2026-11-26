@@ -33,7 +33,8 @@ git send-email $COMMON --to=bug-hurd@gnu.org --cc=$SAMUEL hurd-dde/0001-*.patch
 # rumpkernel (Debian package): bus_dma machine contiguity (1 patch)
 git send-email $COMMON --to=bug-hurd@gnu.org --cc=$SAMUEL rumpkernel/0001-*.patch
 
-# glibc: multiple_threads in new TCBs, fork/signal thread deadlock
-# (2 patches + cover letter), with DCO Signed-off-by lines.
+# glibc: fork/signal thread deadlock (1 patch), with DCO Signed-off-by.
+# (The multiple_threads patch was dropped: glibc removed the x86 catomic_*
+# primitives in 2.43, so nothing reads the field any more.)
 git send-email $COMMON --to=libc-alpha@sourceware.org --cc=bug-hurd@gnu.org \
   --cc=$SAMUEL glibc/*.patch

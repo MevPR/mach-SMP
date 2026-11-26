@@ -437,3 +437,17 @@ Two more findings while preparing the Chromium image:
   bug (finds `mov %rax,(%rax)` after `call _dl_allocate_tls`), for glibc
   2.43 where htl lives in libc.so.  Needs symbols, so not for stripped
   static servers (those are relinked with tlsfix.c).
+
+## Update 2026-11-26 (5): glibc 2.43 no longer has the catomic problem
+
+Debian unstable now has glibc 2.43-7.  `_hurd_tls_new` still leaves
+`multiple_threads` at 0 (mtstress prints `worker multiple_threads=0`), but
+glibc removed the x86 `catomic_*` primitives in September 2025 (4eef002328
+"x86: Remove catomic_* locking primitives", 210ee29503), so nothing reads
+the field any more: mtstress with MALLOC_ARENA_MAX=1 passes 4/4 on 2 CPUs
+with the unpatched 2.43, as with the patched one.  The glibc patch 0002 is
+thus only relevant for glibc <= 2.42 and was dropped from the outbox; the
+static servers of the new hurd package (linked with libc.a 2.43) need no
+tlsfix either.  In 2.43 htl lives in libc.so (libpthread.so is a stub),
+and `mach_setup_tls` allocates a second kind of TCB;
+`testpatch/tlspatch.py --all` handles both, should it be needed.
