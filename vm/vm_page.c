@@ -1282,7 +1282,7 @@ vm_page_evict_one(boolean_t external, boolean_t active, boolean_t alloc_paused)
 {
     struct vm_page *page;
     boolean_t reclaim, double_paging;
-    vm_object_t object;
+    vm_object_t object, held_object;
     struct vm_page_seg *seg;
 
     if (!external && !IP_VALID(memory_manager_default))
@@ -1291,15 +1291,34 @@ vm_page_evict_one(boolean_t external, boolean_t active, boolean_t alloc_paused)
     seg = NULL;
     page = NULL;
     object = NULL;
+    held_object = VM_OBJECT_NULL;
     double_paging = FALSE;
 
 restart:
-    vm_page_lock_queues();
-
     if (page != NULL) {
+        /*
+         * Second pass of double paging.  The page was handed to its
+         * external memory manager, which may already be using it on
+         * another processor: it can fault it in, wire it, move it to
+         * another object or release it.  Only use it again if it is
+         * still the unused page of the pageout object.
+         */
+        assert(held_object != VM_OBJECT_NULL);
+        vm_object_lock(held_object);
+        vm_page_lock_queues();
+
+        if ((vm_page_lookup(held_object, 0) != page)
+            || page->active || page->inactive || (page->wire_count != 0)
+            || page->busy || page->wanted || page->absent || page->error) {
+            vm_page_unlock_queues();
+            vm_object_unlock(held_object);
+            vm_object_deallocate(held_object);
+            return TRUE;
+        }
+
         simple_lock(&seg->lock);
-        vm_object_lock(page->object);
     } else {
+        vm_page_lock_queues();
         page = (active
                 ? vm_page_pull_active_page(external)
                 : vm_page_pull_inactive_page(external));
@@ -1330,6 +1349,12 @@ restart:
         seg = NULL;
         page = NULL;
         object = NULL;
+
+        if (held_object != VM_OBJECT_NULL) {
+            vm_object_deallocate(held_object);
+            held_object = VM_OBJECT_NULL;
+        }
+
         goto restart;
     }
 
@@ -1394,6 +1419,10 @@ out:
             vm_object_unlock(object);
         }
 
+        if (held_object != VM_OBJECT_NULL) {
+            vm_object_deallocate(held_object);
+        }
+
         return TRUE;
     }
 
@@ -1420,10 +1449,18 @@ out:
         }
     }
 
-    vm_pageout_page(page, FALSE, TRUE); /* flush it */
+    if (held_object != VM_OBJECT_NULL) {
+        vm_pageout_page(page, FALSE, TRUE); /* flush it */
+        vm_object_unlock(object);
+        vm_object_deallocate(held_object);
+        return TRUE;
+    }
+
+    vm_pageout_page_ref(page, FALSE, TRUE, /* flush it */
+                        double_paging ? &held_object : NULL);
     vm_object_unlock(object);
 
-    if (double_paging) {
+    if (held_object != VM_OBJECT_NULL) {
         goto restart;
     }
 

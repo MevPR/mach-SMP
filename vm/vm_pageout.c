@@ -319,6 +319,29 @@ vm_pageout_page(
 	boolean_t		initial,
 	boolean_t		flush)
 {
+	vm_pageout_page_ref(m, initial, flush, NULL);
+}
+
+/*
+ *	Routine:	vm_pageout_page_ref
+ *	Purpose:
+ *		Same as vm_pageout_page.  In addition, if new_objectp
+ *		isn't NULL and the page was sent to the memory manager,
+ *		a reference on the object now holding the page is returned
+ *		through it, VM_OBJECT_NULL otherwise.
+ *
+ *		The memory manager may use or release that object as
+ *		soon as the message is sent, so the page must not be
+ *		used again until it is found in the object, at offset 0,
+ *		with the object locked.
+ */
+void
+vm_pageout_page_ref(
+	vm_page_t		m,
+	boolean_t		initial,
+	boolean_t		flush,
+	vm_object_t		*new_objectp)
+{
 	vm_map_copy_t		copy;
 	vm_object_t		old_object;
 	vm_object_t		new_object;
@@ -337,6 +360,9 @@ vm_pageout_page(
 	 *
 	 * XXX Check if precious_clean && !flush can really happen.
 	 */
+	if (new_objectp != NULL)
+		*new_objectp = VM_OBJECT_NULL;
+
 	precious_clean = (!m->dirty) && m->precious;
 	if (precious_clean && !flush) {
 		PAGE_WAKEUP_DONE(m);
@@ -373,6 +399,11 @@ vm_pageout_page(
 				new_object,
 				0,		/* new offset */
 				flush);		/* flush */
+
+	if (new_objectp != NULL) {
+		vm_object_reference(new_object);
+		*new_objectp = new_object;
+	}
 
 	rc = vm_map_copyin_object(new_object, 0, PAGE_SIZE, &copy);
 	assert(rc == KERN_SUCCESS);
