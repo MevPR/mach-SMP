@@ -97,6 +97,13 @@ struct vm_page {
 	vm_object_t	object;		/* which object am I in (O,P) */
 	vm_offset_t	offset;		/* offset into that object (O,P) */
 
+	/*
+	 * The flags protected by the page queues lock (P) and those protected
+	 * by the object lock (O) must not share a memory location: updating
+	 * a bit-field may rewrite the whole location, and on a multiprocessor,
+	 * holding only one of the locks, undo a concurrent update of a flag
+	 * of the other kind.  The zero-width bit-field separates them.
+	 */
 	unsigned int	wire_count:15,	/* how many wired down maps use me?
 					   (O&P) */
 	/* boolean_t */	inactive:1,	/* page is in inactive list (P) */
@@ -106,6 +113,7 @@ struct vm_page {
 			free:1,		/* page is on free list (P) */
 			reference:1,	/* page has been used (P) */
 			external:1,	/* page in external object (P) */
+			:0,
 			busy:1,		/* page is in transit (O) */
 			wanted:1,	/* someone is waiting for page (O) */
 			tabled:1,	/* page is in VP table (O) */
