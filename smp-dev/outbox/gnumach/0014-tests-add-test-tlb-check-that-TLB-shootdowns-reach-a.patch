@@ -1,7 +1,7 @@
 From 035e73c55e9200d44161eb89cbeb76d0eecf9219 Mon Sep 17 00:00:00 2001
 From: Magnus Reimann <magnus.reimann@mailbox.org>
 Date: Wed, 25 Nov 2026 16:34:37 +0100
-Subject: [PATCH gnumach 14/17] tests: add test-tlb, check that TLB shootdowns
+Subject: [PATCH gnumach 14/22] tests: add test-tlb, check that TLB shootdowns
  reach all processors
 
 Reader threads keep a page in their TLB while the main thread keeps

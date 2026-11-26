@@ -1,7 +1,7 @@
 From d18ce47a7451a3857f7058f1160377c6b121f3e9 Mon Sep 17 00:00:00 2001
 From: Magnus Reimann <magnus.reimann@mailbox.org>
 Date: Wed, 25 Nov 2026 17:01:53 +0100
-Subject: [PATCH gnumach 16/17] tests: add test-lll, check mutual exclusion of
+Subject: [PATCH gnumach 16/22] tests: add test-lll, check mutual exclusion of
  glibc-style low-level locks
 
 Threads on all processors contend for locks built like glibc's Hurd

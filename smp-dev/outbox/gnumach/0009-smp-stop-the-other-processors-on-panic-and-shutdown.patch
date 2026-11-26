@@ -1,7 +1,7 @@
 From 5b716fa3a1d90022144442b447b29f2bb2af420d Mon Sep 17 00:00:00 2001
 From: Magnus Reimann <magnus.reimann@mailbox.org>
 Date: Tue, 24 Nov 2026 20:16:58 +0100
-Subject: [PATCH gnumach 09/17] smp: stop the other processors on panic and
+Subject: [PATCH gnumach 09/22] smp: stop the other processors on panic and
  shutdown
 
 When one processor panics, the others keep running: they keep

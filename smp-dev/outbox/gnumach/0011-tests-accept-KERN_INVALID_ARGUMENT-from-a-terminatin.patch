@@ -1,7 +1,7 @@
 From de52bbb5e71328d1af66be61f04259551c004c76 Mon Sep 17 00:00:00 2001
 From: Magnus Reimann <magnus.reimann@mailbox.org>
 Date: Tue, 24 Nov 2026 21:05:13 +0100
-Subject: [PATCH gnumach 11/17] tests: accept KERN_INVALID_ARGUMENT from a
+Subject: [PATCH gnumach 11/22] tests: accept KERN_INVALID_ARGUMENT from a
  terminating thread
 
 thread_terminate first detaches the thread port from the thread with

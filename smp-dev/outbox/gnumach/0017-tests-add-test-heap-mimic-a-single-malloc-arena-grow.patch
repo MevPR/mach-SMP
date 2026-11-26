@@ -1,7 +1,7 @@
 From 7f3932b65e3780c3efd07ed4eddae210419f601f Mon Sep 17 00:00:00 2001
 From: Magnus Reimann <magnus.reimann@mailbox.org>
 Date: Wed, 25 Nov 2026 17:08:10 +0100
-Subject: [PATCH gnumach 17/17] tests: add test-heap, mimic a single malloc
+Subject: [PATCH gnumach 17/22] tests: add test-heap, mimic a single malloc
  arena growing and shrinking
 
 Threads on all processors contend for one glibc-style low-level lock

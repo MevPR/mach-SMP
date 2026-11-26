@@ -1,7 +1,7 @@
 From 3bcd02aae62038068eb7f54aa3066aabc1ee2fe1 Mon Sep 17 00:00:00 2001
 From: Magnus Reimann <magnus.reimann@mailbox.org>
 Date: Tue, 24 Nov 2026 20:27:22 +0100
-Subject: [PATCH gnumach 10/17] tests: add an SMP stress test
+Subject: [PATCH gnumach 10/22] tests: add an SMP stress test
 
 No test runs anything on more than one processor: the APs start in
 their own processor set, and the test tasks stay in the default one,

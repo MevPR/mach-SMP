@@ -1,7 +1,7 @@
 From 12dfd622394c040fbf627e8819d3a974c8378773 Mon Sep 17 00:00:00 2001
 From: Magnus Reimann <magnus.reimann@mailbox.org>
 Date: Tue, 24 Nov 2026 21:37:08 +0100
-Subject: [PATCH gnumach 03/17] debug: do not reinitialize panic_lock on every
+Subject: [PATCH gnumach 03/22] debug: do not reinitialize panic_lock on every
  panic
 
 Panic called panic_init, which reinitializes panic_lock and

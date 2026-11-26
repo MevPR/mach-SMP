@@ -1,7 +1,7 @@
 From c5e5c6d48afadb182426ee1a9644fcb627289d51 Mon Sep 17 00:00:00 2001
 From: Magnus Reimann <magnus.reimann@mailbox.org>
 Date: Tue, 24 Nov 2026 21:05:13 +0100
-Subject: [PATCH gnumach 12/17] smp: add a smp_pset=default kernel option
+Subject: [PATCH gnumach 12/22] smp: add a smp_pset=default kernel option
 
 With MACH_HOST, which SMP kernels enable, cpu_up puts every processor
 but the first in slave_pset, so that userland decides what runs on

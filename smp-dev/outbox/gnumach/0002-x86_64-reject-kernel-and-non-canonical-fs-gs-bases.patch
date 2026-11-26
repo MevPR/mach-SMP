@@ -1,7 +1,7 @@
 From 1e64abbd0cd36f82efee1186f56156b282cea7f3 Mon Sep 17 00:00:00 2001
 From: Magnus Reimann <magnus.reimann@mailbox.org>
 Date: Tue, 24 Nov 2026 19:16:14 +0100
-Subject: [PATCH gnumach 02/17] x86_64: reject kernel and non-canonical fs/gs
+Subject: [PATCH gnumach 02/22] x86_64: reject kernel and non-canonical fs/gs
  bases
 
 thread_setstatus(i386_FSGS_BASE_STATE) only warned about a negative

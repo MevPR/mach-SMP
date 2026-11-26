@@ -1,7 +1,7 @@
 From 884aa3ea2e3893965b3dd2b34d649b373a78a8bb Mon Sep 17 00:00:00 2001
 From: Magnus Reimann <magnus.reimann@mailbox.org>
 Date: Wed, 25 Nov 2026 00:34:57 +0100
-Subject: [PATCH gnumach 05/17] machine: release threads held for an empty
+Subject: [PATCH gnumach 05/22] machine: release threads held for an empty
  processor set
 
 Threads assigned to, or created in, a processor set without processors

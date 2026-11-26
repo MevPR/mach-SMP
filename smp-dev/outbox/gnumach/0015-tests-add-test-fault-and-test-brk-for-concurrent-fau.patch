@@ -1,7 +1,7 @@
 From 5187b140383f3be51036c0ebad813c9447cf7bec Mon Sep 17 00:00:00 2001
 From: Magnus Reimann <magnus.reimann@mailbox.org>
 Date: Wed, 25 Nov 2026 16:55:56 +0100
-Subject: [PATCH gnumach 15/17] tests: add test-fault and test-brk for
+Subject: [PATCH gnumach 15/22] tests: add test-fault and test-brk for
  concurrent faults and brk-style remapping
 
 test-fault has threads on all processors take zero-fill faults on the

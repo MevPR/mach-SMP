@@ -12,7 +12,8 @@ run on every CPU, and fixes the bugs this exposes in the kernel and in
 the Hurd userland on top of it (Hurd libraries, glibc, the disk driver).
 
 Base: GNU Mach from git.savannah.gnu.org (branch `upstream`), Debian
-GNU/Hurd amd64 image 20250807.  The original GNU Mach README is unchanged
+GNU/Hurd amd64 image 20250807, and Debian GNU/Hurd unstable of November
+2026 (glibc 2.43) with [Chromium for the Hurd](https://github.com/MevPR/chromium-hurd).  The original GNU Mach README is unchanged
 in [`README`](README).
 
 | Repository | Component |
@@ -30,9 +31,10 @@ packages and live in [`smp-dev/outbox/`](smp-dev/outbox) here.
 |---|---|
 | **Kernel** | all CPUs usable with the boot option `smp_pset=default` |
 | **Debian GNU/Hurd amd64, 2 CPUs** | boots, and passes a parallel build/sort/tar/find/fork stress test 6 times out of 6 (before the fixes: 3 of 5 runs hung) |
-| **gnumach tests** | 18 of 18 pass, on an SMP kernel (2 CPUs) and on a uniprocessor kernel; i386 builds without new warnings |
-| **Upstream** | all fixes prepared as patch series in [`smp-dev/outbox/`](smp-dev/outbox), **not yet sent** to bug-hurd@gnu.org and libc-alpha@sourceware.org |
-| **Open** | one occurrence of "task ext2fs deallocating a bogus port" at boot, not yet explained; the rumpkernel fix is tested through a rebuilt object linked into rumpdisk, not a package rebuild; the glibc fixes were tested as binary patches, not as a glibc rebuild |
+| **gnumach tests** | 20 of 20 pass (test-multiboot skipped as before), on an SMP kernel (2 CPUs) and on a uniprocessor kernel; i386 builds without new warnings |
+| **Chromium, 2 CPUs** | goal: open and render https://www.duckduckgo.com. Headless Chromium loads and renders it (in about 9 minutes under QEMU without KVM). In a window (Xvfb) the page does not load yet: Chromium's network service dies a few minutes after start and the first navigation never sends its request. Under investigation |
+| **Upstream** | all fixes prepared as patch series in [`smp-dev/outbox/`](smp-dev/outbox) (22 gnumach patches), **not yet sent** to bug-hurd@gnu.org and libc-alpha@sourceware.org |
+| **Open** | "task ext2fs looked up a bogus port" and a hang under Chromium load, with Debian's Hurd servers without the hurd-SMP fixes (being rebuilt with them); the rumpkernel fix is tested through a rebuilt object linked into rumpdisk, not a package rebuild; the glibc fixes were tested as binary patches, not as a glibc rebuild |
 
 ## What was fixed and improved
 
@@ -56,6 +58,19 @@ packages and live in [`smp-dev/outbox/`](smp-dev/outbox) here.
 - **Fixed:** the serial console driver used the tty without its lock from
   interrupt and timer handlers (garbled console output).
 - **Fixed:** threads held for an empty processor set were never released.
+- **Fixed: the clock went backwards** by up to a tick on SMP: a reader
+  could combine the time of a new tick with the high-precision counter
+  value of the previous one.  Chromium's JavaScript engine aborted on it
+  ("negative elapsed time").
+- **Fixed: page flags lost on SMP.** The flags of a physical page that
+  are protected by the page queues lock and those protected by the
+  object lock were bit-fields of the same word; updating one kind could
+  undo a concurrent update of the other, and the kernel panicked
+  (`vm_page_seg_add_active_page` assertion) under Chromium.
+- **Fixed:** when paging out to an external pager under memory pressure
+  ("double paging"), the kernel reused the page after handing it to the
+  pager, which on SMP may already be using or freeing it (found by
+  inspection).
 
 ### Hurd userland
 
@@ -94,8 +109,8 @@ packages and live in [`smp-dev/outbox/`](smp-dev/outbox) here.
 
 - **New gnumach tests** for SMP: stress test, TLB shootdowns (verified to
   catch a kernel without shootdowns), concurrent page faults, brk-style
-  remapping, glibc-style locks over gsync, a malloc-like heap, and
-  preemption of busy threads.
+  remapping, glibc-style locks over gsync, a malloc-like heap,
+  preemption of busy threads, and a clock that must never go backwards.
 - **Tools to debug a hung Hurd from outside**: gdb scripts that list what
   every thread waits for, who suspended whom, and write an ELF core of any
   task; a quarantining malloc for Hurd servers; a multithreaded malloc test

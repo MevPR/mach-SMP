@@ -1,0 +1,220 @@
+From 9a2ba72bc0c8a7f685a33e2325059d8131b77d89 Mon Sep 17 00:00:00 2001
+From: Magnus Reimann <magnus.reimann@mailbox.org>
+Date: Thu, 26 Nov 2026 18:38:53 +0100
+Subject: [PATCH gnumach 22/22] vm: do not reuse a page handed to an external
+ pager when double paging
+
+When memory is low, vm_page_evict_one pages a dirty page of an external
+object out to its memory manager and then immediately pages it out
+again, to the default pager, in case the external pager does not
+release it.  It does so by going back to its restart label with the
+same page pointer.
+
+The page is however already sent to the external memory manager at
+that point: memory_object_data_return has handed over the object
+holding it.  On a uniprocessor kernel the manager cannot run before
+the page is used again, but on SMP it can run concurrently on another
+processor, and fault the page in (making it active), wire it, or
+release the object, freeing the page.  The second pass then puts the
+page on the active queue while it already is on a queue, which would
+trip
+
+  vm_page_seg_add_active_page: Assertion
+  `!page->free && !page->active && !page->inactive' failed
+
+or work on a freed page.  This was found by code inspection while
+investigating another vm_page queue assertion seen with Chromium on a
+2-processor Debian GNU/Hurd amd64 guest; it has not been observed.
+The restart path also locked the object after the page queues, the
+reverse of the usual order.
+
+Add vm_pageout_page_ref, which also returns a reference on the object
+the page was moved to.  For the second pass, lock that object first,
+then the page queues, and only reuse the page if it still is the
+unused page at offset 0 of that object; otherwise give up on double
+paging it, the external pager now owns it.
+
+* vm/vm_pageout.c (vm_pageout_page_ref): New function, from
+vm_pageout_page, returning a reference on the object the page is
+moved to.
+(vm_pageout_page): Call it.
+* vm/vm_pageout.h (vm_pageout_page_ref): Declare.
+* vm/vm_page.c (vm_page_evict_one): Hold a reference on that object
+when double paging; on the second pass, lock it before the page
+queues and only use the page if it still is its unused page.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ vm/vm_page.c    | 49 +++++++++++++++++++++++++++++++++++++++++++------
+ vm/vm_pageout.c | 31 +++++++++++++++++++++++++++++++
+ vm/vm_pageout.h |  2 ++
+ 3 files changed, 76 insertions(+), 6 deletions(-)
+
+diff --git a/vm/vm_page.c b/vm/vm_page.c
+index 5d733120..63693669 100644
+--- a/vm/vm_page.c
++++ b/vm/vm_page.c
+@@ -1282,7 +1282,7 @@ vm_page_evict_one(boolean_t external, boolean_t active, boolean_t alloc_paused)
+ {
+     struct vm_page *page;
+     boolean_t reclaim, double_paging;
+-    vm_object_t object;
++    vm_object_t object, held_object;
+     struct vm_page_seg *seg;
+ 
+     if (!external && !IP_VALID(memory_manager_default))
+@@ -1291,15 +1291,34 @@ vm_page_evict_one(boolean_t external, boolean_t active, boolean_t alloc_paused)
+     seg = NULL;
+     page = NULL;
+     object = NULL;
++    held_object = VM_OBJECT_NULL;
+     double_paging = FALSE;
+ 
+ restart:
+-    vm_page_lock_queues();
+-
+     if (page != NULL) {
++        /*
++         * Second pass of double paging.  The page was handed to its
++         * external memory manager, which may already be using it on
++         * another processor: it can fault it in, wire it, move it to
++         * another object or release it.  Only use it again if it is
++         * still the unused page of the pageout object.
++         */
++        assert(held_object != VM_OBJECT_NULL);
++        vm_object_lock(held_object);
++        vm_page_lock_queues();
++
++        if ((vm_page_lookup(held_object, 0) != page)
++            || page->active || page->inactive || (page->wire_count != 0)
++            || page->busy || page->wanted || page->absent || page->error) {
++            vm_page_unlock_queues();
++            vm_object_unlock(held_object);
++            vm_object_deallocate(held_object);
++            return TRUE;
++        }
++
+         simple_lock(&seg->lock);
+-        vm_object_lock(page->object);
+     } else {
++        vm_page_lock_queues();
+         page = (active
+                 ? vm_page_pull_active_page(external)
+                 : vm_page_pull_inactive_page(external));
+@@ -1330,6 +1349,12 @@ restart:
+         seg = NULL;
+         page = NULL;
+         object = NULL;
++
++        if (held_object != VM_OBJECT_NULL) {
++            vm_object_deallocate(held_object);
++            held_object = VM_OBJECT_NULL;
++        }
++
+         goto restart;
+     }
+ 
+@@ -1394,6 +1419,10 @@ out:
+             vm_object_unlock(object);
+         }
+ 
++        if (held_object != VM_OBJECT_NULL) {
++            vm_object_deallocate(held_object);
++        }
++
+         return TRUE;
+     }
+ 
+@@ -1420,10 +1449,18 @@ out:
+         }
+     }
+ 
+-    vm_pageout_page(page, FALSE, TRUE); /* flush it */
++    if (held_object != VM_OBJECT_NULL) {
++        vm_pageout_page(page, FALSE, TRUE); /* flush it */
++        vm_object_unlock(object);
++        vm_object_deallocate(held_object);
++        return TRUE;
++    }
++
++    vm_pageout_page_ref(page, FALSE, TRUE, /* flush it */
++                        double_paging ? &held_object : NULL);
+     vm_object_unlock(object);
+ 
+-    if (double_paging) {
++    if (held_object != VM_OBJECT_NULL) {
+         goto restart;
+     }
+ 
+diff --git a/vm/vm_pageout.c b/vm/vm_pageout.c
+index c5b5bfbc..1fffc217 100644
+--- a/vm/vm_pageout.c
++++ b/vm/vm_pageout.c
+@@ -318,6 +318,29 @@ vm_pageout_page(
+ 	vm_page_t		m,
+ 	boolean_t		initial,
+ 	boolean_t		flush)
++{
++	vm_pageout_page_ref(m, initial, flush, NULL);
++}
++
++/*
++ *	Routine:	vm_pageout_page_ref
++ *	Purpose:
++ *		Same as vm_pageout_page.  In addition, if new_objectp
++ *		isn't NULL and the page was sent to the memory manager,
++ *		a reference on the object now holding the page is returned
++ *		through it, VM_OBJECT_NULL otherwise.
++ *
++ *		The memory manager may use or release that object as
++ *		soon as the message is sent, so the page must not be
++ *		used again until it is found in the object, at offset 0,
++ *		with the object locked.
++ */
++void
++vm_pageout_page_ref(
++	vm_page_t		m,
++	boolean_t		initial,
++	boolean_t		flush,
++	vm_object_t		*new_objectp)
+ {
+ 	vm_map_copy_t		copy;
+ 	vm_object_t		old_object;
+@@ -337,6 +360,9 @@ vm_pageout_page(
+ 	 *
+ 	 * XXX Check if precious_clean && !flush can really happen.
+ 	 */
++	if (new_objectp != NULL)
++		*new_objectp = VM_OBJECT_NULL;
++
+ 	precious_clean = (!m->dirty) && m->precious;
+ 	if (precious_clean && !flush) {
+ 		PAGE_WAKEUP_DONE(m);
+@@ -374,6 +400,11 @@ vm_pageout_page(
+ 				0,		/* new offset */
+ 				flush);		/* flush */
+ 
++	if (new_objectp != NULL) {
++		vm_object_reference(new_object);
++		*new_objectp = new_object;
++	}
++
+ 	rc = vm_map_copyin_object(new_object, 0, PAGE_SIZE, &copy);
+ 	assert(rc == KERN_SUCCESS);
+ 
+diff --git a/vm/vm_pageout.h b/vm/vm_pageout.h
+index 6ddd821c..e5b12fe7 100644
+--- a/vm/vm_pageout.h
++++ b/vm/vm_pageout.h
+@@ -43,6 +43,8 @@
+ extern vm_page_t vm_pageout_setup(vm_page_t, vm_offset_t, vm_object_t,
+ 				  vm_offset_t, boolean_t);
+ extern void vm_pageout_page(vm_page_t, boolean_t, boolean_t);
++extern void vm_pageout_page_ref(vm_page_t, boolean_t, boolean_t,
++				vm_object_t *);
+ 
+ extern void vm_pageout(void) __attribute__((noreturn));
+ 
+-- 
+2.54.0 (Apple Git-157)
+

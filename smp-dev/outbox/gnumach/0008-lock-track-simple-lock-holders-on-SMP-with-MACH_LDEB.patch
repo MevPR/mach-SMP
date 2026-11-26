@@ -1,7 +1,7 @@
 From 18da48152599a8feb3de6a4229c35cb4db94fe7c Mon Sep 17 00:00:00 2001
 From: Magnus Reimann <magnus.reimann@mailbox.org>
 Date: Tue, 24 Nov 2026 20:02:33 +0100
-Subject: [PATCH gnumach 08/17] lock: track simple lock holders on SMP with
+Subject: [PATCH gnumach 08/22] lock: track simple lock holders on SMP with
  MACH_LDEBUG
 
 On SMP kernels nothing checked simple lock usage: taking a lock twice

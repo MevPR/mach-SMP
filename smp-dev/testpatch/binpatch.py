@@ -18,6 +18,10 @@
               resumed by the later call, after the signal thread state was
               fetched.  Close equivalent of outbox/glibc/0001.
 
+  libc243-fork  libc.so.0.3 (glibc 2.43-7): the same for 2.43, where
+              resume_threads is a nested function: its first call, at
+              0x131fcc (before the child's __thread_create), becomes a nop.
+
   libddekit   libmachdevdde.so.0.3 (netdde): drop the `je` at 0x3ee5 that
               makes the timer thread wait without timeout when the next timer
               is due within 1ms.  Equivalent of outbox/netdde/0001.
@@ -48,6 +52,12 @@ def libc_fork(b):
     b[0x10d227:0x10d22c] = bytes.fromhex('0f1f440000')
 
 
+def libc243_fork(b):
+    assert b[0x131fc5:0x131fd1] == bytes.fromhex('4c8d9570fdffff' 'e82fedffff'), \
+        'unexpected code at 0x131fc5'
+    b[0x131fcc:0x131fd1] = bytes.fromhex('0f1f440000')
+
+
 def libddekit(b):
     assert b[0x3ee3:0x3ee7] == bytes.fromhex('85f67416'), \
         'unexpected code at 0x3ee3'
@@ -55,6 +65,7 @@ def libddekit(b):
 
 
 PATCHES = {'libpthread': libpthread, 'libc-fork': libc_fork,
+           'libc243-fork': libc243_fork,
            'libddekit': libddekit}
 
 if __name__ == '__main__':

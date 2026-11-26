@@ -1,0 +1,69 @@
+From 8ecf537e73a4eb4f5c1defb081ceb29f0f215f58 Mon Sep 17 00:00:00 2001
+From: Magnus Reimann <magnus.reimann@mailbox.org>
+Date: Thu, 26 Nov 2026 19:17:40 +0100
+Subject: [PATCH gnumach 21/22] vm: do not let page flags under different locks
+ share a memory location
+
+The flags of struct vm_page are protected either by the page queues
+lock (inactive, active, laundry, external_laundry, free, reference,
+external) or by the object lock (busy, wanted, tabled, fictitious,
+private, absent, error, dirty, precious, overwriting), but they all
+are bit-fields of the same unsigned int.  Adjacent bit-fields form a
+single memory location, and the compiler updates a flag with a
+read-modify-write of it.  On a multiprocessor, a processor holding
+only the object lock can thus write back a stale value of a flag a
+processor holding the page queues lock just changed, and conversely.
+
+This was caught by gdb on a 2-processor Debian GNU/Hurd amd64 guest
+running Chromium.  The pageout thread, balancing segments, pulls an
+active page in vm_page_seg_pull_active_page (clearing page->active),
+fails to lock its object, which another processor holds, and puts the
+page back, which fails with
+
+  vm_page_seg_add_active_page: Assertion
+  `!page->free && !page->active && !page->inactive' failed
+
+because page->active got set again in between.
+
+Separate the two kinds with a zero-width bit-field, which makes them
+distinct memory locations.  wire_count, only changed with both locks
+held, stays with the page queues flags.  The size of struct vm_page
+doesn't change.
+
+* vm/vm_page.h (struct vm_page): Separate the flags protected by the
+page queues lock from those protected by the object lock.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ vm/vm_page.h | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/vm/vm_page.h b/vm/vm_page.h
+index 6990f95e..863ee71e 100644
+--- a/vm/vm_page.h
++++ b/vm/vm_page.h
+@@ -97,6 +97,13 @@ struct vm_page {
+ 	vm_object_t	object;		/* which object am I in (O,P) */
+ 	vm_offset_t	offset;		/* offset into that object (O,P) */
+ 
++	/*
++	 * The flags protected by the page queues lock (P) and those protected
++	 * by the object lock (O) must not share a memory location: updating
++	 * a bit-field may rewrite the whole location, and on a multiprocessor,
++	 * holding only one of the locks, undo a concurrent update of a flag
++	 * of the other kind.  The zero-width bit-field separates them.
++	 */
+ 	unsigned int	wire_count:15,	/* how many wired down maps use me?
+ 					   (O&P) */
+ 	/* boolean_t */	inactive:1,	/* page is in inactive list (P) */
+@@ -106,6 +113,7 @@ struct vm_page {
+ 			free:1,		/* page is on free list (P) */
+ 			reference:1,	/* page has been used (P) */
+ 			external:1,	/* page in external object (P) */
++			:0,
+ 			busy:1,		/* page is in transit (O) */
+ 			wanted:1,	/* someone is waiting for page (O) */
+ 			tabled:1,	/* page is in VP table (O) */
+-- 
+2.54.0 (Apple Git-157)
+

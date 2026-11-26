@@ -1,7 +1,7 @@
 From dbf14ee2c1ea4a1822133d65bb85d1bd12bcb8a9 Mon Sep 17 00:00:00 2001
 From: Magnus Reimann <magnus.reimann@mailbox.org>
 Date: Tue, 24 Nov 2026 20:02:19 +0100
-Subject: [PATCH gnumach 06/17] lock: make simple_lock_taken meaningful on SMP
+Subject: [PATCH gnumach 06/22] lock: make simple_lock_taken meaningful on SMP
 
 On multiprocessors simple_lock_taken always returned 1, so every
 assert (simple_lock_taken (...)), vm_object_lock_taken and

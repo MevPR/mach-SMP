@@ -1,7 +1,7 @@
 From cf841936e18552b5ed3d4ed00be26d94bda7a57c Mon Sep 17 00:00:00 2001
 From: Magnus Reimann <magnus.reimann@mailbox.org>
 Date: Tue, 24 Nov 2026 20:02:19 +0100
-Subject: [PATCH gnumach 07/17] lock: only check for held simple locks when the
+Subject: [PATCH gnumach 07/22] lock: only check for held simple locks when the
  lock can sleep
 
 lock_write, lock_read, lock_read_to_write and lock_try_read_to_write

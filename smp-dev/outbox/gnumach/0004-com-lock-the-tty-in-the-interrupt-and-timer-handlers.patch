@@ -1,7 +1,7 @@
 From ce8482a8d676127db6b8bf41f7466fc1af85f59e Mon Sep 17 00:00:00 2001
 From: Magnus Reimann <magnus.reimann@mailbox.org>
 Date: Tue, 24 Nov 2026 22:25:50 +0100
-Subject: [PATCH gnumach 04/17] com: lock the tty in the interrupt and timer
+Subject: [PATCH gnumach 04/22] com: lock the tty in the interrupt and timer
  handlers
 
 The tty layer protects a tty with t_lock, and calls comstart with it

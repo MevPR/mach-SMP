@@ -1,7 +1,7 @@
 From cbdd8995c62751a4ffbfcea78792ad353c2650b7 Mon Sep 17 00:00:00 2001
 From: Magnus Reimann <magnus.reimann@mailbox.org>
 Date: Tue, 24 Nov 2026 21:16:16 +0100
-Subject: [PATCH gnumach 13/17] tests: make test-smp exercise TLB shootdowns
+Subject: [PATCH gnumach 13/22] tests: make test-smp exercise TLB shootdowns
  and task creation
 
 Have one worker keep downgrading and upgrading the protection of
