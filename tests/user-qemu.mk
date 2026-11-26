@@ -264,6 +264,7 @@ USER_TESTS := \
 	tests/test-lll \
 	tests/test-heap \
 	tests/test-preempt \
+	tests/test-clock \
 	tests/test-pset
 
 USER_TESTS_CLEAN = $(subst tests/,clean-,$(USER_TESTS))
