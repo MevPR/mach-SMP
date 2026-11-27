@@ -26,6 +26,17 @@
               makes the timer thread wait without timeout when the next timer
               is due within 1ms.  Equivalent of outbox/netdde/0001.
 
+  netdde2026  /hurd/netdde of Debian netdde 0.0.20200330-15 built with hurd
+              0.9.git20261028, where libddekit is linked in statically.  The
+              timer thread computes to = (expires - jiffies) * 10^6 / HZ /
+              1000 unsigned and passes it to ddekit_sem_down_timed, where 0
+              means forever.  Rewritten in place (0x54d759-0x54d782): a due
+              or overdue timer gives 0, and 0 becomes 1 (ms).  The room comes
+              from computing straight into %rax and from dropping the
+              to == -1 check, which can no longer be true.  Close equivalent
+              of outbox/netdde/0001 (that one does not sleep at all for a due
+              timer).
+
 Every patch checks the original bytes first and refuses other builds.
 Static programs carry their own copy of htl: relink them with
 stress/tlsfix.c instead (see testpatch/rebuild-statics.sh).
@@ -64,9 +75,33 @@ def libddekit(b):
     b[0x3ee5:0x3ee7] = b'\x90\x90'
 
 
+def netdde2026(b):
+    base = 0x400000
+    start, end = 0x54d759, 0x54d782
+    orig = bytes.fromhex('4829c3' '4869db40420f00' '48c1eb05' '4889d8' '49f7e4'
+                         '4889d3' '48c1eb07' 'e837e8ffff' '83fbff'
+                         '0f849a000000')
+    assert b[start - base:end - base] == orig, 'unexpected code at 0x54d759'
+    call_at = 0x54d77b
+    code = (bytes.fromhex('4829c3'            # sub %rax,%rbx
+                          '7f02'              # jg 1f
+                          '31db'              # xor %ebx,%ebx
+                          '4869c340420f00'    # 1: imul $1000000,%rbx,%rax
+                          '48c1e805'          # shr $5,%rax
+                          '49f7e4'            # mul %r12
+                          '4889d3'            # mov %rdx,%rbx
+                          '48c1eb07'          # shr $7,%rbx
+                          '83fb01'            # cmp $1,%ebx
+                          '83d300')           # adc $0,%ebx
+            + b'\xe8' + struct.pack('<i', 0x54bfb0 - (call_at + 5))
+            + bytes.fromhex('6690'))
+    assert len(code) == end - start
+    b[start - base:end - base] = code
+
+
 PATCHES = {'libpthread': libpthread, 'libc-fork': libc_fork,
            'libc243-fork': libc243_fork,
-           'libddekit': libddekit}
+           'libddekit': libddekit, 'netdde2026': netdde2026}
 
 if __name__ == '__main__':
     if len(sys.argv) != 4 or sys.argv[1] not in PATCHES:
