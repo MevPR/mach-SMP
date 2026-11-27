@@ -13,17 +13,24 @@ the Hurd userland on top of it (Hurd libraries, glibc, the disk driver).
 
 Base: GNU Mach from git.savannah.gnu.org (branch `upstream`), Debian
 GNU/Hurd amd64 image 20250807, and Debian GNU/Hurd unstable of November
-2026 (glibc 2.43) with [Chromium for the Hurd](https://github.com/MevPR/chromium-hurd).  The original GNU Mach README is unchanged
-in [`README`](README).
-
-| Repository | Component |
-|---|---|
-| **mach-SMP** (this one) | GNU Mach kernel; the investigation notes, tests and tools for the whole project |
-| [hurd-SMP](https://github.com/MevPR/hurd-SMP) | Hurd libraries and servers (libports, libfshelp, libpager, pflocal, console-client) |
-| [hurd-glibc](https://github.com/MevPR/hurd-glibc) | glibc's Hurd port |
+2026 (glibc 2.43) with
+[Chromium for the Hurd](https://github.com/MevPR/chromium-hurd).  The
+original GNU Mach README is unchanged in [`README`](README).
 
 The netdde (libddekit) and rumpkernel fixes are patches against Debian
 packages and live in [`smp-dev/outbox/`](smp-dev/outbox) here.
+
+## Related repositories
+
+The project is split into three repositories that belong together:
+running Debian GNU/Hurd on several CPUs needs the fixes from all three.
+
+| Repository | Component |
+|---|---|
+| **mach-SMP** (this one) | GNU Mach kernel (SMP fixes, `smp_pset=default`, tests); investigation notes, tools and test scripts for the whole project; the netdde and rumpkernel patches |
+| [hurd-SMP](https://github.com/MevPR/hurd-SMP) | Hurd libraries and servers (libports, libfshelp, libpager, pflocal, console-client) |
+| [hurd-glibc](https://github.com/MevPR/hurd-glibc) | glibc's Hurd port (fork deadlock; `multiple_threads` for glibc ≤ 2.42) |
+| [chromium-hurd](https://github.com/MevPR/chromium-hurd) | Chromium for the Hurd, used as the acceptance test: it opens and renders https://www.duckduckgo.com on 2 CPUs |
 
 ## Status
 
