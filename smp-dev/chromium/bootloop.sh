@@ -27,5 +27,4 @@ for i in $(seq 1 $N); do
     docker exec chrvm timeout 60 sh /hb/vmssh.sh 'sync; (sleep 2; halt) >/dev/null 2>&1 &' >/dev/null 2>&1; sleep 90
   fi
 done
-docker rm -f chrvm >/dev/null 2>&1
 echo BOOTLOOP-DONE | tee -a $R
