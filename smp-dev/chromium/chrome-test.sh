@@ -3,7 +3,7 @@
 ulimit -v unlimited
 # usage: chrome-test.sh <wait-seconds> <tag>
 W=${1:-600}; T=${2:-run}
-FLAGS="--ipc-connection-timeout=120 --disable-gpu-watchdog --no-first-run --no-default-browser-check --user-data-dir=/tmp/chr-$T --window-size=1280,860 --window-position=0,0 --log-net-log=/tmp/net-$T.json $EXTRA"
+FLAGS="--ipc-connection-timeout=1200 --disable-gpu-watchdog --no-first-run --no-default-browser-check --user-data-dir=/tmp/chr-$T --window-size=1280,860 --window-position=0,0 --log-net-log=/tmp/net-$T.json $EXTRA"
 pkill -f Xvfb; pkill -f chromium; sleep 2; rm -rf /tmp/chr-$T /tmp/.X1-lock
 Xvfb :1 -screen 0 1280x900x24 -nolisten tcp > /tmp/xvfb-$T.log 2>&1 &
 sleep 10

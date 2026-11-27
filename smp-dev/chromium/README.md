@@ -18,6 +18,20 @@ early-boot fork hang needs the glibc fork fix
 | `utilwrap.sh` | VM | `--utility-cmd-prefix` that logs how utility processes end |
 | `hurdfix-build.sh` | VM | rebuilds Debian's hurd source with the hurd-SMP fixes and installs them |
 
+Result (2026-11-27): Chromium opened and rendered DuckDuckGo after about
+15 minutes, on 2 processors, with all hurd-SMP fixes installed:
+
+![DuckDuckGo in Chromium on GNU/Hurd SMP](duckduckgo-smp2.png)
+
+Faster rebuild of the hurd fixes than `hurdfix-build.sh` (which builds
+everything and takes hours under TCG): `hfix-quick.sh` builds only the
+patched libraries and links the servers against the installed hurd-dev
+libraries, `hfix-loop.sh` generates the MIG headers it needs on the way,
+`hfix-parted.sh` rebuilds libstore with parted (the root file system is
+`part:1:device:wd0`; without parted, `ext2fs.static` fails with "Invalid
+argument"), `hfix-install.sh` installs, keeping the originals in
+`/root/orig/hfix`.
+
 Lessons:
 
 - Use AHCI (`AHCI=1`): with PIIX IDE under TCG and 4 GB, ext2fs gets I/O
@@ -28,3 +42,9 @@ Lessons:
   software compositing; harmless.
 - Everything is slow under TCG: the DuckDuckGo document is requested
   about 6 minutes after start.
+- `--ipc-connection-timeout` must be large (1200): a child process whose
+  IPC connection the browser has not confirmed within that time exits
+  with status 0.  With 120, the network service and the storage service
+  exited about 2 minutes after start, while the browser's UI thread was
+  still busy, and the first navigation was lost: the window showed the
+  URL and an empty page forever.

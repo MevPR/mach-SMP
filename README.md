@@ -32,9 +32,9 @@ packages and live in [`smp-dev/outbox/`](smp-dev/outbox) here.
 | **Kernel** | all CPUs usable with the boot option `smp_pset=default` |
 | **Debian GNU/Hurd amd64, 2 CPUs** | boots, and passes a parallel build/sort/tar/find/fork stress test 6 times out of 6 (before the fixes: 3 of 5 runs hung) |
 | **gnumach tests** | 20 of 20 pass (test-multiboot skipped as before), on an SMP kernel (2 CPUs) and on a uniprocessor kernel; i386 builds without new warnings |
-| **Chromium, 2 CPUs** | goal: open and render https://www.duckduckgo.com. Headless Chromium loads and renders it (in about 9 minutes under QEMU without KVM). In a window (Xvfb) the page does not load yet: Chromium's network service dies a few minutes after start and the first navigation never sends its request. Under investigation |
+| **Chromium, 2 CPUs** | **opens and renders https://www.duckduckgo.com** in a window (Xvfb), on the SMP kernel with `smp_pset=default`, with the hurd-SMP fixes installed and no kernel panic ([screenshot](smp-dev/chromium/duckduckgo-smp2.png)); about 15 minutes under QEMU without KVM. See [`smp-dev/chromium/`](smp-dev/chromium) |
 | **Upstream** | all fixes prepared as patch series in [`smp-dev/outbox/`](smp-dev/outbox) (22 gnumach patches), **not yet sent** to bug-hurd@gnu.org and libc-alpha@sourceware.org |
-| **Open** | "task ext2fs looked up a bogus port" and a hang under Chromium load, with Debian's Hurd servers without the hurd-SMP fixes (being rebuilt with them); the rumpkernel fix is tested through a rebuilt object linked into rumpdisk, not a package rebuild; the glibc fixes were tested as binary patches, not as a glibc rebuild |
+| **Open** | with Debian's Hurd servers *without* the hurd-SMP fixes, Chromium load gave "task ext2fs looked up a bogus port" and a hang (not seen since the fixes are installed); the netdde DHCP hang still occurs at some boots of the November 2026 image (the libddekit fix is not installed there); the rumpkernel fix is tested through a rebuilt object linked into rumpdisk, not a package rebuild; the glibc fixes were tested as binary patches, not as a glibc rebuild |
 
 ## What was fixed and improved
 
